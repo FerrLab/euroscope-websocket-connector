@@ -202,3 +202,38 @@ STAR (last route token) if present, inserting the new one — and then calls
   procedure, review the route with `.wsc show` first — the rewrite is
   intentionally conservative and only removes a token that matches the
   currently extracted procedure name.
+
+---
+
+## 7. JSON contract (for external systems)
+
+### `.wsc json <message>`
+
+Feeds one message of the standardized JSON contract
+([PROTOCOL.md](PROTOCOL.md)) through the plugin and prints the response —
+byte-for-byte what a WebSocket peer will receive in phase 2. Everything
+after `.wsc json` is passed through verbatim.
+
+```
+.wsc json {"type":"command","action":"ping"}
+.wsc json {"type":"command","callsign":"DLH4TX","action":"get_flight"}
+.wsc json {"type":"command","callsign":"DLH4TX","action":"set_ground_state","payload":{"state":"PUSH"}}
+```
+
+Every capability on this page is also reachable through the contract; see
+the action table in [PROTOCOL.md](PROTOCOL.md).
+
+### `.wsc events <on|off|pos on|pos off|status>`
+
+Prints the contract's **event stream** (`type:"event"` messages) to the
+WSC tab as events happen:
+
+- `on` / `off` — `flight_updated` (flight plan or controller-assigned data
+  changed) and `flight_removed` events.
+- `pos on` / `pos off` — additionally `position_updated` events.
+  **Warning:** one per radar target every few seconds; very noisy in busy
+  sessions.
+- `status` — show current toggles.
+
+In phase 2 these same messages go to the WebSocket gateway instead of the
+chat tab.

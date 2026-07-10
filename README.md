@@ -7,9 +7,11 @@ a WebSocket bridge that dials out to a gateway; the current phase is the
 and driven by dot-commands, so it can be exercised and tested by hand before
 any networking is added.
 
-> **Status: phase 1 — plugin core (no networking yet).**
-> The `Actions` class (`src/Actions.h`) is the future RPC surface; the
-> WebSocket layer will call the same methods the dot-commands call today.
+> **Status: phase 1.5 — plugin core + JSON contract (no networking yet).**
+> The `Actions` class (`src/Actions.h`) is the RPC surface, and the
+> standardized JSON contract ([docs/PROTOCOL.md](docs/PROTOCOL.md)) is
+> implemented and testable via `.wsc json`. Phase 2 carries the same JSON
+> messages over WebSocket.
 
 ## What it can do
 
@@ -21,8 +23,16 @@ any networking is added.
 | 4 | Send a private message to a user *(experimental)* | `.wsc msg <cs> <text>` |
 | 5 | Set scratch-pad content, incl. ground states (PUSH/TAXI/…) | `.wsc pad <cs> <text>`, `.wsc state <cs> <token>` |
 | 6 | Read & set SID/STAR | `.wsc show <cs>`, `.wsc sid <cs> <SID[/RWY]>`, `.wsc star <cs> <STAR>` |
+| — | **Standardized JSON contract** — all of the above as bidirectional `{type, callsign, action, payload}` messages | `.wsc json <message>`, `.wsc events on` |
 
 Full command reference with examples and caveats: **[docs/COMMANDS.md](docs/COMMANDS.md)**.
+The JSON contract for external systems: **[docs/PROTOCOL.md](docs/PROTOCOL.md)**.
+
+```json
+{ "type": "command", "callsign": "ABC1234", "action": "set_ground_state", "payload": { "state": "PUSH" } }
+{ "type": "response", "ok": true, "callsign": "ABC1234", "action": "set_ground_state", "payload": { "message": "..." } }
+{ "type": "event", "callsign": "ABC1234", "action": "flight_updated", "payload": { "...": "FlightObject" } }
+```
 
 ## Quick start
 
@@ -47,6 +57,7 @@ the live network, until you are comfortable with what each command does.
 
 | Document | Contents |
 |----------|----------|
+| [docs/PROTOCOL.md](docs/PROTOCOL.md) | **The JSON contract** — envelope, every action, FlightObject schema, error model |
 | [docs/COMMANDS.md](docs/COMMANDS.md) | Every command: syntax, examples, permissions, caveats |
 | [docs/BUILDING.md](docs/BUILDING.md) | Toolchain, build steps, loading into EuroScope, debugging |
 | [docs/DEVELOPER-GUIDE.md](docs/DEVELOPER-GUIDE.md) | Architecture, EuroScope API gotchas, how to extend |
@@ -72,4 +83,5 @@ the live network, until you are comfortable with what each command does.
 MIT — see [LICENSE](LICENSE). The files in `sdk/` are part of the EuroScope
 plug-in development kit © Gergely Csernák and are redistributed here, as is
 common practice in the plugin community, solely for building EuroScope
-plugins.
+plugins. `third_party/nlohmann/json.hpp` is
+[nlohmann/json](https://github.com/nlohmann/json) (MIT, © Niels Lohmann).

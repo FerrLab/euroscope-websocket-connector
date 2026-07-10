@@ -59,7 +59,7 @@ namespace
 }
 
 // ---------------------------------------------------------------------
-// lookup
+// lookup & snapshot
 // ---------------------------------------------------------------------
 
 CFlightPlan Actions::Find(const std::string& callsign, std::string& error) const
@@ -71,161 +71,86 @@ CFlightPlan Actions::Find(const std::string& callsign, std::string& error) const
     return fp;
 }
 
-// ---------------------------------------------------------------------
-// capability 1: list / show
-// ---------------------------------------------------------------------
+FlightInfo Actions::Snapshot(CFlightPlan fp)
+{
+    CFlightPlanData fpd = fp.GetFlightPlanData();
+    CFlightPlanControllerAssignedData cad = fp.GetControllerAssignedData();
 
-std::vector<std::string> Actions::ListFlights(const std::string& filter,
-                                              size_t maxLines,
-                                              size_t& totalMatched) const
+    FlightInfo info;
+    info.callsign = S(fp.GetCallsign());
+    info.planType = S(fpd.GetPlanType());
+    info.aircraftType = S(fpd.GetAircraftFPType());
+    info.wtc = fpd.GetAircraftWtc();
+
+    info.origin = S(fpd.GetOrigin());
+    info.destination = S(fpd.GetDestination());
+    info.alternate = S(fpd.GetAlternate());
+    info.departureRunway = S(fpd.GetDepartureRwy());
+    info.arrivalRunway = S(fpd.GetArrivalRwy());
+    info.sid = S(fpd.GetSidName());
+    info.star = S(fpd.GetStarName());
+    info.route = S(fpd.GetRoute());
+    info.remarks = S(fpd.GetRemarks());
+
+    info.finalAltitude = fp.GetFinalAltitude();
+    info.clearedAltitude = fp.GetClearedAltitude();
+
+    info.assignedHeading = cad.GetAssignedHeading();
+    info.assignedSpeed = cad.GetAssignedSpeed();
+    info.assignedMach = cad.GetAssignedMach();
+    info.assignedRate = cad.GetAssignedRate();
+    info.directTo = S(cad.GetDirectToPointName());
+    info.assignedSquawk = S(cad.GetSquawk());
+    info.scratchPad = S(cad.GetScratchPadString());
+
+    info.groundState = S(fp.GetGroundState());
+    info.clearanceFlag = fp.GetClearenceFlag();
+
+    info.trackingController = S(fp.GetTrackingControllerCallsign());
+    info.trackedByMe = fp.GetTrackingControllerIsMe();
+    info.communicationType = fpd.GetCommunicationType();
+
+    CRadarTarget rt = fp.GetCorrelatedRadarTarget();
+    if (rt.IsValid())
+    {
+        info.correlated = true;
+        info.transponderSquawk = S(rt.GetPosition().GetSquawk());
+        info.flightLevel = rt.GetPosition().GetFlightLevel();
+        info.groundSpeed = rt.GetPosition().GetReportedGS();
+        info.latitude = rt.GetPosition().GetPosition().m_Latitude;
+        info.longitude = rt.GetPosition().GetPosition().m_Longitude;
+    }
+    return info;
+}
+
+std::vector<FlightInfo> Actions::CollectFlights(const std::string& filter) const
 {
     const std::string f = Upper(filter);
-    std::vector<std::string> lines;
-    totalMatched = 0;
+    std::vector<FlightInfo> out;
 
     for (CFlightPlan fp = m_es->FlightPlanSelectFirst(); fp.IsValid();
          fp = m_es->FlightPlanSelectNext(fp))
     {
-        const std::string callsign = S(fp.GetCallsign());
-        CFlightPlanData fpd = fp.GetFlightPlanData();
-        const std::string origin = S(fpd.GetOrigin());
-        const std::string dest = S(fpd.GetDestination());
-
-        if (!f.empty() && !StartsWith(Upper(callsign), f) &&
-            Upper(origin) != f && Upper(dest) != f)
-            continue;
-
-        ++totalMatched;
-        if (lines.size() >= maxLines)
-            continue; // keep counting matches, stop formatting
-
-        CFlightPlanControllerAssignedData cad = fp.GetControllerAssignedData();
-
-        std::ostringstream line;
-        line << callsign << "  " << S(fpd.GetAircraftFPType())
-             << "  " << (origin.empty() ? "????" : origin)
-             << ">" << (dest.empty() ? "????" : dest)
-             << "  RFL" << fp.GetFinalAltitude() / 100;
-
-        const int cfl = fp.GetClearedAltitude();
-        if (cfl == 1)
-            line << "  CFL:ILS";
-        else if (cfl == 2)
-            line << "  CFL:VIS";
-        else if (cfl != 0)
-            line << "  CFL" << cfl / 100;
-
-        const std::string squawk = S(cad.GetSquawk());
-        if (!squawk.empty())
-            line << "  SQ" << squawk;
-
-        const std::string ground = S(fp.GetGroundState());
-        if (!ground.empty())
-            line << "  " << ground;
-        if (fp.GetClearenceFlag())
-            line << "  CLEA";
-
-        CRadarTarget rt = fp.GetCorrelatedRadarTarget();
-        if (rt.IsValid())
-            line << "  GS" << rt.GetPosition().GetReportedGS();
-
-        const std::string tracker = S(fp.GetTrackingControllerCallsign());
-        if (!tracker.empty())
-            line << "  [" << (fp.GetTrackingControllerIsMe() ? "me" : tracker) << "]";
-
-        lines.push_back(line.str());
+        if (!f.empty())
+        {
+            CFlightPlanData fpd = fp.GetFlightPlanData();
+            if (!StartsWith(Upper(S(fp.GetCallsign())), f) &&
+                Upper(S(fpd.GetOrigin())) != f && Upper(S(fpd.GetDestination())) != f)
+                continue;
+        }
+        out.push_back(Snapshot(fp));
     }
-    return lines;
+    return out;
 }
 
-ActionResult Actions::DescribeFlight(const std::string& callsign) const
+bool Actions::GetFlight(const std::string& callsign, FlightInfo& out,
+                        std::string& error) const
 {
-    std::string error;
     CFlightPlan fp = Find(callsign, error);
     if (!fp.IsValid())
-        return ActionResult::Fail(error);
-
-    CFlightPlanData fpd = fp.GetFlightPlanData();
-    CFlightPlanControllerAssignedData cad = fp.GetControllerAssignedData();
-
-    std::ostringstream out;
-    out << S(fp.GetCallsign()) << "  " << S(fpd.GetPlanType()) << "  "
-        << S(fpd.GetAircraftFPType()) << " (WTC " << fpd.GetAircraftWtc() << ")\n";
-
-    out << "Routing: " << S(fpd.GetOrigin());
-    const std::string depRwy = S(fpd.GetDepartureRwy());
-    if (!depRwy.empty())
-        out << "/" << depRwy;
-    out << " -> " << S(fpd.GetDestination());
-    const std::string arrRwy = S(fpd.GetArrivalRwy());
-    if (!arrRwy.empty())
-        out << "/" << arrRwy;
-    const std::string altn = S(fpd.GetAlternate());
-    if (!altn.empty())
-        out << " (ALTN " << altn << ")";
-    out << "\n";
-
-    const std::string sid = S(fpd.GetSidName());
-    const std::string star = S(fpd.GetStarName());
-    out << "SID: " << (sid.empty() ? "-" : sid)
-        << "   STAR: " << (star.empty() ? "-" : star) << "\n";
-
-    out << "RFL " << fp.GetFinalAltitude() << " ft";
-    const int cfl = fp.GetClearedAltitude();
-    if (cfl == 1)
-        out << "   CFL: cleared ILS approach";
-    else if (cfl == 2)
-        out << "   CFL: cleared visual approach";
-    else if (cfl != 0)
-        out << "   CFL " << cfl << " ft";
-    out << "\n";
-
-    // Controller-assigned values (0 / empty means unassigned)
-    std::ostringstream assigned;
-    if (cad.GetAssignedHeading() != 0)
-        assigned << "  HDG " << cad.GetAssignedHeading();
-    if (cad.GetAssignedSpeed() != 0)
-        assigned << "  SPD " << cad.GetAssignedSpeed();
-    if (cad.GetAssignedMach() != 0)
-        assigned << "  MACH 0." << cad.GetAssignedMach();
-    if (cad.GetAssignedRate() != 0)
-        assigned << "  RATE " << cad.GetAssignedRate();
-    const std::string direct = S(cad.GetDirectToPointName());
-    if (!direct.empty())
-        assigned << "  DCT " << direct;
-    const std::string asgn = assigned.str();
-    out << "Assigned:" << (asgn.empty() ? " -" : asgn) << "\n";
-
-    const std::string sqAssigned = S(cad.GetSquawk());
-    out << "Squawk assigned: " << (sqAssigned.empty() ? "-" : sqAssigned);
-    CRadarTarget rt = fp.GetCorrelatedRadarTarget();
-    if (rt.IsValid())
-    {
-        out << "   transponder: " << S(rt.GetPosition().GetSquawk())
-            << "   FL" << rt.GetPosition().GetFlightLevel() / 100
-            << "   GS" << rt.GetPosition().GetReportedGS();
-    }
-    out << "\n";
-
-    const std::string ground = S(fp.GetGroundState());
-    out << "Ground state: " << (ground.empty() ? "-" : ground)
-        << "   Clearance flag: " << (fp.GetClearenceFlag() ? "received" : "not received")
-        << "\n";
-
-    const std::string tracker = S(fp.GetTrackingControllerCallsign());
-    out << "Tracked by: "
-        << (tracker.empty() ? "-" : (fp.GetTrackingControllerIsMe() ? tracker + " (me)" : tracker))
-        << "   Comm: " << fpd.GetCommunicationType() << "\n";
-
-    const std::string pad = S(cad.GetScratchPadString());
-    out << "Scratch pad: " << (pad.empty() ? "-" : pad) << "\n";
-
-    out << "Route: " << S(fpd.GetRoute()) << "\n";
-    const std::string remarks = S(fpd.GetRemarks());
-    if (!remarks.empty())
-        out << "Remarks: " << remarks;
-
-    return ActionResult::Ok(out.str());
+        return false;
+    out = Snapshot(fp);
+    return true;
 }
 
 // ---------------------------------------------------------------------

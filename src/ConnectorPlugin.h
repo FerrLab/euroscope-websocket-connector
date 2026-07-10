@@ -19,9 +19,10 @@
 #include "EuroScopePlugIn.h"
 
 #include "Actions.h"
+#include "JsonApi.h"
 
 #define PLUGIN_NAME "WebSocket Connector"
-#define PLUGIN_VERSION "0.1.0"
+#define PLUGIN_VERSION "0.2.0"
 #define PLUGIN_AUTHOR "FerrLab"
 #define PLUGIN_COPYRIGHT "MIT License - github.com/FerrLab/euroscope-websocket-connector"
 
@@ -38,8 +39,23 @@ public:
     // EuroScope itself does not recognise. Return true when we handled it.
     bool OnCompileCommand(const char* sCommandLine) override;
 
+    // Event sources for the JSON contract's "event" messages
+    // (docs/PROTOCOL.md). Today the events are printed to the WSC chat tab
+    // when enabled via ".wsc events"; phase 2 pushes them to the gateway.
+    void OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan FlightPlan) override;
+    void OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFlightPlan FlightPlan,
+                                                  int DataType) override;
+    void OnFlightPlanDisconnect(EuroScopePlugIn::CFlightPlan FlightPlan) override;
+    void OnRadarTargetPositionUpdate(EuroScopePlugIn::CRadarTarget RadarTarget) override;
+
 private:
     Actions m_actions;
+    JsonApi m_jsonApi;
+
+    // Event-stream toggles (".wsc events ..."). Position events are
+    // separate because they fire for every target every few seconds.
+    bool m_flightEvents = false;
+    bool m_positionEvents = false;
 
     // Writes one line to the "WSC" chat handler.
     void Say(const std::string& text);
@@ -58,4 +74,6 @@ private:
     void CmdSid(const std::vector<std::string>& tokens, bool star);
     void CmdMsg(const std::vector<std::string>& tokens, const std::string& line);
     void CmdFreq(const std::vector<std::string>& tokens, const std::string& line);
+    void CmdJson(const std::vector<std::string>& tokens, const std::string& line);
+    void CmdEvents(const std::vector<std::string>& tokens);
 };

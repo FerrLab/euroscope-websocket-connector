@@ -29,6 +29,7 @@ add_library(WebSocketConnector SHARED
     src/ConnectorPlugin.cpp
     src/Actions.cpp
     src/ChatInjection.cpp
+    src/JsonApi.cpp
 )
 
 target_compile_features(WebSocketConnector PRIVATE cxx_std_17)
@@ -41,7 +42,7 @@ target_compile_definitions(WebSocketConnector PRIVATE
     NOMINMAX
 )
 
-target_include_directories(WebSocketConnector PRIVATE sdk)
+target_include_directories(WebSocketConnector PRIVATE sdk third_party)
 target_link_libraries(WebSocketConnector PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk/EuroScopePlugInDll.lib")
 

@@ -13,11 +13,15 @@ EuroScope (32-bit MFC app, UI thread)
  ▼
 ConnectorPlugin : EuroScopePlugIn::CPlugIn          src/ConnectorPlugin.{h,cpp}
  │  OnCompileCommand(".wsc ...") → parse → dispatch
- │  formats ActionResult → DisplayUserMessage (chat tab "WSC")
- ▼
+ │  On...Update callbacks → JsonApi event builders (when enabled)
+ │  formats output → DisplayUserMessage (chat tab "WSC")
+ ├────────────────► JsonApi                         src/JsonApi.{h,cpp}
+ │                   │  the JSON contract (docs/PROTOCOL.md):
+ │                   │  "command" in → "response" out; "event" builders
+ ▼                   ▼
 Actions                                             src/Actions.{h,cpp}
- │  one method per supported operation
- │  string in → ActionResult out; no UI, no parsing
+ │  one method per operation; reads return FlightInfo structs,
+ │  writes return ActionResult; no UI, no parsing, no JSON
  ▼
 EuroScope plugin API (CFlightPlan, CFlightPlanData,
 CFlightPlanControllerAssignedData, CRadarTarget, ...)
@@ -27,22 +31,30 @@ ChatInjection                                       src/ChatInjection.{h,cpp}
 ```
 
 **The separation matters:** `ConnectorPlugin` is the *command-line* front
-end. The planned WebSocket layer becomes a *second* front end that calls
-the same `Actions` methods, giving identical semantics over the wire. Keep
-new functionality in `Actions` (or a sibling), never inline in command
-handlers.
+end; `JsonApi` is the *contract* front end. Both call the same `Actions`
+methods, so semantics are identical no matter where a request comes from.
+Phase 2 attaches a WebSocket transport to `JsonApi` — the contract itself
+does not change. Keep new functionality in `Actions` (or a sibling), never
+inline in command handlers, and keep `docs/PROTOCOL.md` in sync with
+`JsonApi.cpp`.
 
 ### Adding a new operation (checklist)
 
-1. Add a method to `Actions` returning `ActionResult`. Look up the flight
-   with `Find()`; report EuroScope refusals honestly.
-2. Add a `Cmd...` handler + dispatch line in
+1. Add a method to `Actions` returning `ActionResult` (or a struct for
+   reads). Look up the flight with `Find()`; report EuroScope refusals
+   honestly.
+2. Add the action to `JsonApi::HandleMessage` (name it `snake_case`) and
+   specify it in [PROTOCOL.md](PROTOCOL.md).
+3. Add a `Cmd...` handler + dispatch line in
    `ConnectorPlugin::OnCompileCommand`, and a line in `CmdHelp`.
-3. Document it in [COMMANDS.md](COMMANDS.md) (syntax, example, permissions,
+4. Document it in [COMMANDS.md](COMMANDS.md) (syntax, example, permissions,
    caveats).
-4. Verify the API methods you call actually exist in
+5. Verify the API methods you call actually exist in
    [`sdk/EuroScopePlugIn.h`](../sdk/EuroScopePlugIn.h) — don't trust
    snippets from other plugins; API versions differ.
+
+New *events* follow the same pattern: a builder in `JsonApi`, a callback
+override in `ConnectorPlugin`, a row in PROTOCOL.md's event table.
 
 ## EuroScope API rules & gotchas (hard-won, do not skip)
 
@@ -107,8 +119,28 @@ handlers.
 
 ## Testing
 
-There is no automated test rig (the API only exists inside a running
-EuroScope). Manual test procedure:
+### Unit tests (any platform)
+
+The JSON contract layer is decoupled from the SDK behind the `IActions`
+interface, so it has a real test suite that runs anywhere — no Windows, no
+EuroScope:
+
+```
+cmake -S tests -B build-tests
+cmake --build build-tests
+ctest --test-dir build-tests --output-on-failure
+```
+
+`tests/json_api_test.cpp` covers the envelope validation, action dispatch,
+payload validation, the error model and the event builders against a mock
+`IActions`. **Add a test whenever you add or change an action or event.**
+The tests are deliberately a standalone CMake project because the root
+CMakeLists refuses to configure on non-Windows.
+
+### In EuroScope (the parts that can't be mocked)
+
+`Actions.cpp` and `ChatInjection.cpp` only run inside EuroScope. Manual
+test procedure:
 
 1. Build Debug, load into EuroScope.
 2. Open a **SweatBox/simulator session** (never the live network) with a
@@ -123,18 +155,22 @@ EuroScope). Manual test procedure:
 
 ## Roadmap to the WebSocket connector (phase 2)
 
-The intended shape (see research doc §4 for the reasoning):
+The contract is done ([PROTOCOL.md](PROTOCOL.md)); phase 2 is *transport
+only* (see research doc §4 for the reasoning):
 
 - Plugin runs a WebSocket **client** dialing out to a configurable gateway
   (StripCol-style), reconnecting with backoff; socket lives on its own
   thread.
-- Outbound: serialize on the main thread in `OnFlightPlanFlightPlanDataUpdate`,
-  `OnFlightPlanControllerAssignedDataUpdate`, `OnRadarTargetPositionUpdate`,
-  `OnControllerPositionUpdate`, the disconnect callbacks → queue → socket
-  thread sends. Full-state snapshot on (re)connect via the same iteration
-  `Actions::ListFlights` uses.
-- Inbound: gateway messages map 1:1 onto `Actions` methods; queue them and
-  apply from `OnTimer`. `ActionResult` serializes into the response.
+- Outbound: the event callbacks already build the wire messages via
+  `JsonApi::Event*` (today they print when `.wsc events` is on) — route
+  those strings into a thread-safe queue drained by the socket thread.
+  Full-state snapshot on (re)connect: one `flight_updated` per
+  `Actions::CollectFlights("")` entry (or a dedicated `session_snapshot`
+  event — reserved in the spec).
+- Inbound: socket thread queues raw `command` strings; the main thread
+  drains the queue in `OnTimer` (1 Hz), runs `JsonApi::HandleMessage`
+  (which must stay main-thread-only), and queues the `response` strings
+  back to the socket thread.
 - Library candidate: IXWebSocket (builds x86, no external event loop) —
   statically linked; or a bare WinSock client since the gateway protocol is
   ours to define.

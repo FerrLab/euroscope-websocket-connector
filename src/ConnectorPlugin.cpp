@@ -108,13 +108,114 @@ namespace
     }
 }
 
+namespace
+{
+    // One compact summary line per flight, e.g.:
+    // DLH4TX  A320  EDDM>EDDF  RFL240  CFL120  SQ1000  TAXI  GS18  [me]
+    std::string FormatSummaryLine(const FlightInfo& f)
+    {
+        std::ostringstream line;
+        line << f.callsign << "  " << f.aircraftType
+             << "  " << (f.origin.empty() ? "????" : f.origin)
+             << ">" << (f.destination.empty() ? "????" : f.destination)
+             << "  RFL" << f.finalAltitude / 100;
+
+        if (f.clearedAltitude == 1)
+            line << "  CFL:ILS";
+        else if (f.clearedAltitude == 2)
+            line << "  CFL:VIS";
+        else if (f.clearedAltitude != 0)
+            line << "  CFL" << f.clearedAltitude / 100;
+
+        if (!f.assignedSquawk.empty())
+            line << "  SQ" << f.assignedSquawk;
+        if (!f.groundState.empty())
+            line << "  " << f.groundState;
+        if (f.clearanceFlag)
+            line << "  CLEA";
+        if (f.correlated)
+            line << "  GS" << f.groundSpeed;
+        if (!f.trackingController.empty())
+            line << "  [" << (f.trackedByMe ? "me" : f.trackingController) << "]";
+        return line.str();
+    }
+
+    std::string FormatDetail(const FlightInfo& f)
+    {
+        std::ostringstream out;
+        out << f.callsign << "  " << f.planType << "  " << f.aircraftType
+            << " (WTC " << f.wtc << ")\n";
+
+        out << "Routing: " << f.origin;
+        if (!f.departureRunway.empty())
+            out << "/" << f.departureRunway;
+        out << " -> " << f.destination;
+        if (!f.arrivalRunway.empty())
+            out << "/" << f.arrivalRunway;
+        if (!f.alternate.empty())
+            out << " (ALTN " << f.alternate << ")";
+        out << "\n";
+
+        out << "SID: " << (f.sid.empty() ? "-" : f.sid)
+            << "   STAR: " << (f.star.empty() ? "-" : f.star) << "\n";
+
+        out << "RFL " << f.finalAltitude << " ft";
+        if (f.clearedAltitude == 1)
+            out << "   CFL: cleared ILS approach";
+        else if (f.clearedAltitude == 2)
+            out << "   CFL: cleared visual approach";
+        else if (f.clearedAltitude != 0)
+            out << "   CFL " << f.clearedAltitude << " ft";
+        out << "\n";
+
+        std::ostringstream assigned;
+        if (f.assignedHeading != 0)
+            assigned << "  HDG " << f.assignedHeading;
+        if (f.assignedSpeed != 0)
+            assigned << "  SPD " << f.assignedSpeed;
+        if (f.assignedMach != 0)
+            assigned << "  MACH 0." << f.assignedMach;
+        if (f.assignedRate != 0)
+            assigned << "  RATE " << f.assignedRate;
+        if (!f.directTo.empty())
+            assigned << "  DCT " << f.directTo;
+        const std::string asgn = assigned.str();
+        out << "Assigned:" << (asgn.empty() ? " -" : asgn) << "\n";
+
+        out << "Squawk assigned: " << (f.assignedSquawk.empty() ? "-" : f.assignedSquawk);
+        if (f.correlated)
+        {
+            out << "   transponder: " << f.transponderSquawk
+                << "   FL" << f.flightLevel / 100 << "   GS" << f.groundSpeed;
+        }
+        out << "\n";
+
+        out << "Ground state: " << (f.groundState.empty() ? "-" : f.groundState)
+            << "   Clearance flag: " << (f.clearanceFlag ? "received" : "not received")
+            << "\n";
+
+        out << "Tracked by: "
+            << (f.trackingController.empty()
+                    ? "-"
+                    : (f.trackedByMe ? f.trackingController + " (me)" : f.trackingController))
+            << "   Comm: " << f.communicationType << "\n";
+
+        out << "Scratch pad: " << (f.scratchPad.empty() ? "-" : f.scratchPad) << "\n";
+        out << "Route: " << f.route << "\n";
+        if (!f.remarks.empty())
+            out << "Remarks: " << f.remarks;
+        return out.str();
+    }
+}
+
 ConnectorPlugin::ConnectorPlugin()
     : EuroScopePlugIn::CPlugIn(EuroScopePlugIn::COMPATIBILITY_CODE,
                                PLUGIN_NAME,
                                PLUGIN_VERSION,
                                PLUGIN_AUTHOR,
                                PLUGIN_COPYRIGHT),
-      m_actions(this)
+      m_actions(this),
+      m_jsonApi(m_actions)
 {
     Say(std::string(PLUGIN_NAME) + " v" PLUGIN_VERSION
         " loaded. Type '.wsc help' for available commands.");
@@ -168,6 +269,10 @@ bool ConnectorPlugin::OnCompileCommand(const char* sCommandLine)
         CmdMsg(tokens, line);
     else if (sub == "freq")
         CmdFreq(tokens, line);
+    else if (sub == "json")
+        CmdJson(tokens, line);
+    else if (sub == "events")
+        CmdEvents(tokens);
     else
         Say("Unknown sub-command '" + tokens[1] + "'. Type '.wsc help'.");
 
@@ -188,6 +293,8 @@ void ConnectorPlugin::CmdHelp()
     Say(".wsc sid <cs> <SID[/RWY]> | star <cs> <STAR> - assign SID/STAR");
     Say(".wsc msg <cs> <text>          - private message (experimental, UI injection)");
     Say(".wsc freq <text>              - text to primary frequency (experimental, UI injection)");
+    Say(".wsc json <message>           - run a JSON contract command (docs/PROTOCOL.md)");
+    Say(".wsc events <on|off|pos on|pos off|status> - print the JSON event stream");
 }
 
 void ConnectorPlugin::CmdList(const std::vector<std::string>& tokens)
@@ -195,21 +302,20 @@ void ConnectorPlugin::CmdList(const std::vector<std::string>& tokens)
     const std::string filter = tokens.size() > 2 ? tokens[2] : "";
     const size_t kMaxLines = 25;
 
-    size_t total = 0;
-    std::vector<std::string> lines = m_actions.ListFlights(filter, kMaxLines, total);
+    const std::vector<FlightInfo> flights = m_actions.CollectFlights(filter);
 
-    if (total == 0)
+    if (flights.empty())
     {
         Say(filter.empty() ? "No flight plans in this session."
                            : "No flight plans matching '" + filter + "'.");
         return;
     }
-    Say("--- " + std::to_string(total) + " flight(s)" +
+    Say("--- " + std::to_string(flights.size()) + " flight(s)" +
         (filter.empty() ? "" : " matching '" + filter + "'") + " ---");
-    for (const auto& l : lines)
-        Say(l);
-    if (total > lines.size())
-        Say("(+" + std::to_string(total - lines.size()) +
+    for (size_t i = 0; i < flights.size() && i < kMaxLines; ++i)
+        Say(FormatSummaryLine(flights[i]));
+    if (flights.size() > kMaxLines)
+        Say("(+" + std::to_string(flights.size() - kMaxLines) +
             " more - narrow it down with '.wsc list <filter>')");
 }
 
@@ -220,8 +326,14 @@ void ConnectorPlugin::CmdShow(const std::vector<std::string>& tokens)
         Say("Usage: .wsc show <callsign>");
         return;
     }
-    const ActionResult r = m_actions.DescribeFlight(tokens[2]);
-    SayLines(r.message);
+    FlightInfo info;
+    std::string error;
+    if (!m_actions.GetFlight(tokens[2], info, error))
+    {
+        Say(error);
+        return;
+    }
+    SayLines(FormatDetail(info));
 }
 
 void ConnectorPlugin::CmdSet(const std::vector<std::string>& tokens)
@@ -354,4 +466,86 @@ void ConnectorPlugin::CmdFreq(const std::vector<std::string>& tokens, const std:
     const auto r = ChatInjection::SendToPrimaryFrequency(text);
     Say(r.ok ? "Text handed to EuroScope for the primary frequency."
              : "Frequency text FAILED: " + r.detail);
+}
+
+void ConnectorPlugin::CmdJson(const std::vector<std::string>& tokens, const std::string& line)
+{
+    if (tokens.size() < 3)
+    {
+        Say("Usage: .wsc json {\"type\":\"command\",\"callsign\":\"DLH4TX\",\"action\":\"get_flight\"}");
+        Say("Contract reference: docs/PROTOCOL.md");
+        return;
+    }
+    // Everything after ".wsc json" is the raw message; the response is the
+    // exact payload a WebSocket client would receive.
+    Say(m_jsonApi.HandleMessage(RemainderAfterTokens(line, 2)));
+}
+
+void ConnectorPlugin::CmdEvents(const std::vector<std::string>& tokens)
+{
+    const std::string a = tokens.size() > 2 ? Lower(tokens[2]) : "status";
+    const std::string b = tokens.size() > 3 ? Lower(tokens[3]) : "";
+
+    if (a == "on")
+        m_flightEvents = true;
+    else if (a == "off")
+        m_flightEvents = m_positionEvents = false;
+    else if (a == "pos" && b == "on")
+        m_positionEvents = true;
+    else if (a == "pos" && b == "off")
+        m_positionEvents = false;
+    else if (a != "status")
+    {
+        Say("Usage: .wsc events <on|off|pos on|pos off|status>");
+        return;
+    }
+    Say(std::string("Event stream: flight events ") +
+        (m_flightEvents ? "ON" : "off") + ", position events " +
+        (m_positionEvents ? "ON (one per target every few seconds!)" : "off"));
+}
+
+// ---------------------------------------------------------------------
+// event callbacks -> JSON event stream
+// ---------------------------------------------------------------------
+
+void ConnectorPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan FlightPlan)
+{
+    if (!m_flightEvents || !FlightPlan.IsValid())
+        return;
+    FlightInfo info;
+    std::string error;
+    if (m_actions.GetFlight(FlightPlan.GetCallsign() ? FlightPlan.GetCallsign() : "", info, error))
+        Say(m_jsonApi.EventFlightUpdated(info));
+}
+
+void ConnectorPlugin::OnFlightPlanControllerAssignedDataUpdate(
+    EuroScopePlugIn::CFlightPlan FlightPlan, int /*DataType*/)
+{
+    // Same event as filed-data changes: consumers get the full, fresh
+    // flight object either way and don't need to care which side changed.
+    OnFlightPlanFlightPlanDataUpdate(FlightPlan);
+}
+
+void ConnectorPlugin::OnFlightPlanDisconnect(EuroScopePlugIn::CFlightPlan FlightPlan)
+{
+    if (!m_flightEvents || !FlightPlan.IsValid())
+        return;
+    const char* callsign = FlightPlan.GetCallsign();
+    Say(m_jsonApi.EventFlightRemoved(callsign ? callsign : ""));
+}
+
+void ConnectorPlugin::OnRadarTargetPositionUpdate(EuroScopePlugIn::CRadarTarget RadarTarget)
+{
+    if (!m_positionEvents || !RadarTarget.IsValid())
+        return;
+    PositionUpdate pos;
+    const char* callsign = RadarTarget.GetCallsign();
+    pos.callsign = callsign ? callsign : "";
+    pos.latitude = RadarTarget.GetPosition().GetPosition().m_Latitude;
+    pos.longitude = RadarTarget.GetPosition().GetPosition().m_Longitude;
+    pos.flightLevel = RadarTarget.GetPosition().GetFlightLevel();
+    pos.groundSpeed = RadarTarget.GetPosition().GetReportedGS();
+    const char* squawk = RadarTarget.GetPosition().GetSquawk();
+    pos.squawk = squawk ? squawk : "";
+    Say(m_jsonApi.EventPositionUpdated(pos));
 }
