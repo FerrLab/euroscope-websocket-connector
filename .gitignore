@@ -1,0 +1,13 @@
+# Build output
+build/
+out/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+CMakeSettings.json
+CMakeUserPresets.json
+
+# Misc
+*.log

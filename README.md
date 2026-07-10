@@ -1,1 +1,75 @@
 # euroscope-websocket-connector
+
+A [EuroScope](https://www.euroscope.hu/wp/) plugin that exposes the
+controller's session data and actions to external software. The end goal is
+a WebSocket bridge that dials out to a gateway; the current phase is the
+**plugin core**: every capability is implemented against the EuroScope API
+and driven by dot-commands, so it can be exercised and tested by hand before
+any networking is added.
+
+> **Status: phase 1 — plugin core (no networking yet).**
+> The `Actions` class (`src/Actions.h`) is the future RPC surface; the
+> WebSocket layer will call the same methods the dot-commands call today.
+
+## What it can do
+
+| # | Capability | Command |
+|---|------------|---------|
+| 1 | List all flights known to the session | `.wsc list [filter]`, `.wsc show <cs>` |
+| 2 | Modify flight-plan / controller-assigned parameters | `.wsc set <cs> <field> <value>` |
+| 3 | Send a text message to the primary frequency *(experimental)* | `.wsc freq <text>` |
+| 4 | Send a private message to a user *(experimental)* | `.wsc msg <cs> <text>` |
+| 5 | Set scratch-pad content, incl. ground states (PUSH/TAXI/…) | `.wsc pad <cs> <text>`, `.wsc state <cs> <token>` |
+| 6 | Read & set SID/STAR | `.wsc show <cs>`, `.wsc sid <cs> <SID[/RWY]>`, `.wsc star <cs> <STAR>` |
+
+Full command reference with examples and caveats: **[docs/COMMANDS.md](docs/COMMANDS.md)**.
+
+## Quick start
+
+1. Build the DLL (Windows, Visual Studio 2019/2022, **32-bit**):
+
+   ```
+   cmake -B build -A Win32
+   cmake --build build --config Release
+   ```
+
+   Details and troubleshooting: [docs/BUILDING.md](docs/BUILDING.md).
+
+2. In EuroScope: `Other Set` → `Plug-Ins…` → `Load` →
+   `build/Release/WebSocketConnector.dll`.
+
+3. Type `.wsc help` in the command line.
+
+Test on a [SweatBox/playback session](https://www.euroscope.hu/wp/), not on
+the live network, until you are comfortable with what each command does.
+
+## Documentation
+
+| Document | Contents |
+|----------|----------|
+| [docs/COMMANDS.md](docs/COMMANDS.md) | Every command: syntax, examples, permissions, caveats |
+| [docs/BUILDING.md](docs/BUILDING.md) | Toolchain, build steps, loading into EuroScope, debugging |
+| [docs/DEVELOPER-GUIDE.md](docs/DEVELOPER-GUIDE.md) | Architecture, EuroScope API gotchas, how to extend |
+| [docs/euroscope-plugin-research.md](docs/euroscope-plugin-research.md) | Background research: EuroScope, plugin ecosystem, prior art |
+| [sdk/README.md](sdk/README.md) | Provenance of the vendored EuroScope SDK files |
+
+## Important constraints (the short version)
+
+- EuroScope is **32-bit**; the plugin must be built for **Win32/x86**
+  (the announced 64-bit transition is suspended as of March 2026).
+- All plugin callbacks run on **EuroScope's UI thread** — nothing here may
+  block. The future WebSocket layer runs on its own thread and talks to the
+  main thread through a queue (see the developer guide).
+- The plugin API has **no function to send chat messages**; capabilities
+  3 & 4 are implemented by injecting into EuroScope's command line, which is
+  undocumented behaviour — treat them as experimental.
+- Data modifications generally require you to be **connected and allowed to
+  modify the flight** (usually: tracking it); EuroScope refuses otherwise
+  and the plugin reports it.
+
+## License
+
+MIT — see [LICENSE](LICENSE). The files in `sdk/` are part of the EuroScope
+plug-in development kit © Gergely Csernák and are redistributed here, as is
+common practice in the plugin community, solely for building EuroScope
+plugins.
