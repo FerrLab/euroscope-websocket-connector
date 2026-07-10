@@ -67,6 +67,23 @@ If EuroScope refuses to load the DLL:
 - Quick print-debugging: `DisplayUserMessage(...)` into the WSC tab (see
   `ConnectorPlugin::Say`).
 
+## Verification status
+
+What has and hasn't been verified, honestly:
+
+- **Verified by executed tests** (any platform, `tests/`): the JSON
+  contract layer (118 checks), the WebSocket codec against the RFC 6455
+  vectors, and the real `WsClient` end-to-end over live TCP (handshake,
+  echo, fragmentation, ping/pong, close, error paths) via its POSIX build.
+- **Verified by type-checking only**: the EuroScope-facing code
+  (`Actions`, `ConnectorPlugin`, `ChatInjection`, Win32 branch of
+  `WsClient`) — checked against the real SDK header, but never run inside
+  EuroScope by the authors of this document.
+- **Unverified until someone runs it in EuroScope**: plugin load, command
+  behaviour on a live session, settings persistence, the chat-injection
+  workaround, and gateway behaviour under a real controller workload.
+  Test in a SweatBox session first (see below).
+
 ## CI note
 
 The project deliberately has no non-Windows build path. If you add CI, use

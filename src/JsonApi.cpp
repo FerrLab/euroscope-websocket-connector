@@ -338,3 +338,16 @@ std::string JsonApi::EventPositionUpdated(const PositionUpdate& position) const
     };
     return j.dump();
 }
+
+std::string JsonApi::EventSessionSnapshot(const std::vector<FlightInfo>& flights) const
+{
+    json j = Envelope("event", "session_snapshot", std::string());
+    json arr = json::array();
+    for (const FlightInfo& f : flights)
+        arr.push_back(ToJson(f));
+    j["payload"] = {
+        { "count", flights.size() },
+        { "flights", std::move(arr) },
+    };
+    return j.dump();
+}

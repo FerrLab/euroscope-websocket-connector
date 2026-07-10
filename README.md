@@ -1,17 +1,18 @@
 # euroscope-websocket-connector
 
-A [EuroScope](https://www.euroscope.hu/wp/) plugin that exposes the
-controller's session data and actions to external software. The end goal is
-a WebSocket bridge that dials out to a gateway; the current phase is the
-**plugin core**: every capability is implemented against the EuroScope API
-and driven by dot-commands, so it can be exercised and tested by hand before
-any networking is added.
+A [EuroScope](https://www.euroscope.hu/wp/) plugin that connects the
+controller's session to external software over **WebSocket**: it dials out
+to a gateway, streams the session as JSON events (flights, positions,
+snapshots), and accepts JSON commands back (modify flight plans, ground
+states, SID/STAR, messages). Everything is also driven manually via
+`.wsc` dot-commands for testing.
 
-> **Status: phase 1.5 — plugin core + JSON contract (no networking yet).**
-> The `Actions` class (`src/Actions.h`) is the RPC surface, and the
-> standardized JSON contract ([docs/PROTOCOL.md](docs/PROTOCOL.md)) is
-> implemented and testable via `.wsc json`. Phase 2 carries the same JSON
-> messages over WebSocket.
+> **Status: phase 2 — WebSocket transport implemented.**
+> The plugin is a reconnecting WebSocket client (`.wsc gateway ...`,
+> zero-dependency RFC 6455 implementation, `ws://` only for now) carrying
+> the standardized JSON contract ([docs/PROTOCOL.md](docs/PROTOCOL.md)).
+> Needs real-world testing inside EuroScope — see *Verification status*
+> in [docs/BUILDING.md](docs/BUILDING.md).
 
 ## What it can do
 
@@ -49,6 +50,16 @@ The JSON contract for external systems: **[docs/PROTOCOL.md](docs/PROTOCOL.md)**
    `build/Release/WebSocketConnector.dll`.
 
 3. Type `.wsc help` in the command line.
+
+4. Connect to your gateway:
+
+   ```
+   .wsc gateway url ws://127.0.0.1:3000/session
+   .wsc gateway connect
+   ```
+
+   The plugin sends a `session_snapshot`, streams events, and answers
+   `command` messages per [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
 Test on a [SweatBox/playback session](https://www.euroscope.hu/wp/), not on
 the live network, until you are comfortable with what each command does.

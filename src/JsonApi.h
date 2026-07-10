@@ -56,6 +56,9 @@ public:
     std::string EventFlightRemoved(const std::string& callsign) const;
     // New radar position for a target (also for uncorrelated targets).
     std::string EventPositionUpdated(const PositionUpdate& position) const;
+    // Full session state; sent right after (re)connecting to a gateway so
+    // consumers can rebuild their world before incremental events resume.
+    std::string EventSessionSnapshot(const std::vector<FlightInfo>& flights) const;
 
 private:
     IActions& m_actions;

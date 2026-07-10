@@ -235,5 +235,43 @@ WSC tab as events happen:
   sessions.
 - `status` — show current toggles.
 
-In phase 2 these same messages go to the WebSocket gateway instead of the
-chat tab.
+While a gateway is connected, the same messages also go over the socket —
+the print toggles and the gateway are independent consumers.
+
+---
+
+## 8. Gateway connection
+
+### `.wsc gateway url <ws://host:port/path>`
+
+Sets (and persists) the gateway address. `ws://` only — see
+[PROTOCOL.md](PROTOCOL.md) *Transport*. Changing the URL while connected
+reconnects to the new target.
+
+### `.wsc gateway connect` / `.wsc gateway disconnect`
+
+Opens/closes the connection. While enabled, the plugin reconnects
+automatically with exponential backoff (2 s → 60 s) and sends a
+`session_snapshot` event after every (re)connect.
+
+### `.wsc gateway auto <on|off>`
+
+Persisted: connect automatically when the plugin loads (requires a saved
+URL).
+
+### `.wsc gateway pos <on|off>`
+
+Persisted: forward `position_updated` events to the gateway (default on).
+Turn off to cut traffic massively in busy airspace; flight events and
+snapshots are always sent.
+
+### `.wsc gateway status`
+
+Shows connection state, URL, sent/received/dropped counters and the last
+connection error.
+
+```
+.wsc gateway url ws://127.0.0.1:3000/session
+.wsc gateway connect
+.wsc gateway status
+```

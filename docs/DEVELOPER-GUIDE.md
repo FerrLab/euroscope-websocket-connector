@@ -8,35 +8,53 @@ and where everything comes from.
 ## Architecture
 
 ```
-EuroScope (32-bit MFC app, UI thread)
- │  loads DLL, calls EuroScopePlugInInit()          src/dllmain.cpp
- ▼
-ConnectorPlugin : EuroScopePlugIn::CPlugIn          src/ConnectorPlugin.{h,cpp}
- │  OnCompileCommand(".wsc ...") → parse → dispatch
- │  On...Update callbacks → JsonApi event builders (when enabled)
- │  formats output → DisplayUserMessage (chat tab "WSC")
- ├────────────────► JsonApi                         src/JsonApi.{h,cpp}
- │                   │  the JSON contract (docs/PROTOCOL.md):
- │                   │  "command" in → "response" out; "event" builders
- ▼                   ▼
-Actions                                             src/Actions.{h,cpp}
- │  one method per operation; reads return FlightInfo structs,
- │  writes return ActionResult; no UI, no parsing, no JSON
- ▼
-EuroScope plugin API (CFlightPlan, CFlightPlanData,
-CFlightPlanControllerAssignedData, CRadarTarget, ...)
+EuroScope (32-bit MFC app, UI thread)                      ┊ socket thread
+ │  loads DLL, calls EuroScopePlugInInit()   dllmain.cpp   ┊
+ ▼                                                         ┊
+ConnectorPlugin : CPlugIn          ConnectorPlugin.{h,cpp} ┊
+ │  OnCompileCommand(".wsc ...") → parse → dispatch        ┊
+ │  On...Update callbacks → event JSON → EmitEvent         ┊
+ │  OnTimer (1 Hz) → Gateway::Tick → inbound commands      ┊
+ │    → JsonApi::HandleMessage → responses back out        ┊
+ ├──► JsonApi                            JsonApi.{h,cpp}   ┊
+ │     │  the JSON contract (docs/PROTOCOL.md):            ┊
+ │     │  "command" in → "response" out; event builders    ┊
+ │     ▼                                                   ┊
+ │   IActions (interface)                IActions.h        ┊
+ │     ▲                                                   ┊
+ ▼     │                                                   ┊
+Actions                                  Actions.{h,cpp}   ┊
+ │  reads → FlightInfo, writes → ActionResult              ┊
+ ▼                                                         ┊
+EuroScope plugin API                                       ┊
+                                                           ┊
+Gateway                                  Gateway.{h,cpp}   ┊
+ │  reconnect/backoff, counters, snapshot trigger          ┊
+ └─► Ws::WsClient                    ws/WsClient.{h,cpp} ══╪══ thread-safe
+      connect/handshake/frame pump on its own thread       ┊   queues
+      built on the pure codec:                             ┊
+      ws/WsFrame.{h,cpp} + ws/WsHandshake.{h,cpp}          ┊
 
-ChatInjection                                       src/ChatInjection.{h,cpp}
+ChatInjection                            ChatInjection.{h,cpp}
     isolated workaround for the missing chat API — see below
 ```
 
 **The separation matters:** `ConnectorPlugin` is the *command-line* front
-end; `JsonApi` is the *contract* front end. Both call the same `Actions`
-methods, so semantics are identical no matter where a request comes from.
-Phase 2 attaches a WebSocket transport to `JsonApi` — the contract itself
-does not change. Keep new functionality in `Actions` (or a sibling), never
-inline in command handlers, and keep `docs/PROTOCOL.md` in sync with
+end; `JsonApi` is the *contract* front end; the `Gateway`/`WsClient` pair
+is pure transport and never interprets messages. All semantics live in
+`Actions` (behind `IActions`), so behaviour is identical no matter where a
+request comes from. Keep new functionality in `Actions` (or a sibling),
+never inline in command handlers, and keep `docs/PROTOCOL.md` in sync with
 `JsonApi.cpp`.
+
+**Threading, as implemented:** the socket thread (inside `WsClient`) only
+touches sockets and its own mutex-guarded queues. Everything EuroScope
+lives on the main thread: events are serialised inside the callbacks and
+handed to `Gateway::Send`; inbound commands are drained once per second in
+`OnTimer` and executed there. Never call the EuroScope API (or `Actions`,
+or `JsonApi::HandleMessage`) from any other thread. `WsClient` is one
+connection attempt; `Gateway` recreates it for reconnects (2 s → 60 s
+backoff) and triggers the `session_snapshot` on each connect.
 
 ### Adding a new operation (checklist)
 
@@ -131,11 +149,21 @@ cmake --build build-tests
 ctest --test-dir build-tests --output-on-failure
 ```
 
-`tests/json_api_test.cpp` covers the envelope validation, action dispatch,
-payload validation, the error model and the event builders against a mock
-`IActions`. **Add a test whenever you add or change an action or event.**
-The tests are deliberately a standalone CMake project because the root
-CMakeLists refuses to configure on non-Windows.
+- `tests/json_api_test.cpp` — the contract: envelope validation, action
+  dispatch, payload validation, error model, event builders (mock
+  `IActions`).
+- `tests/ws_test.cpp` — the WebSocket codec against the RFC 6455 vectors:
+  handshake key/accept, URL parsing, frame encode/decode, fragmentation,
+  the message assembler.
+- `tests/ws_client_test.cpp` (UNIX only) — the REAL `WsClient` code,
+  end-to-end over TCP against an in-process scripted server: handshake,
+  echo, server push, fragmented messages, ping/pong, close and error
+  paths. (`WsClient.cpp` has a small POSIX `#ifdef` branch exactly so this
+  test can exist; the production DLL uses the Win32 branch.)
+
+**Add a test whenever you add or change an action, event, or codec
+behaviour.** The tests are deliberately a standalone CMake project because
+the root CMakeLists refuses to configure on non-Windows.
 
 ### In EuroScope (the parts that can't be mocked)
 
@@ -153,24 +181,20 @@ test procedure:
    *plugin* reports success; delivery failure shows in EuroScope's own
    chat, which is expected and documented behaviour).
 
-## Roadmap to the WebSocket connector (phase 2)
+## Phase 2 status & what's next
 
-The contract is done ([PROTOCOL.md](PROTOCOL.md)); phase 2 is *transport
-only* (see research doc §4 for the reasoning):
+The WebSocket transport is implemented as described above (own RFC 6455
+client — zero dependencies, x86-safe, codec fully unit-tested; see
+research doc §4 for why not IXWebSocket/Boost). Candidate next steps:
 
-- Plugin runs a WebSocket **client** dialing out to a configurable gateway
-  (StripCol-style), reconnecting with backoff; socket lives on its own
-  thread.
-- Outbound: the event callbacks already build the wire messages via
-  `JsonApi::Event*` (today they print when `.wsc events` is on) — route
-  those strings into a thread-safe queue drained by the socket thread.
-  Full-state snapshot on (re)connect: one `flight_updated` per
-  `Actions::CollectFlights("")` entry (or a dedicated `session_snapshot`
-  event — reserved in the spec).
-- Inbound: socket thread queues raw `command` strings; the main thread
-  drains the queue in `OnTimer` (1 Hz), runs `JsonApi::HandleMessage`
-  (which must stay main-thread-only), and queues the `response` strings
-  back to the socket thread.
-- Library candidate: IXWebSocket (builds x86, no external event loop) —
-  statically linked; or a bare WinSock client since the gateway protocol is
-  ours to define.
+- **`wss://` (TLS)** — required before any gateway leaves the LAN.
+  Options: Windows Schannel wrapped around the socket, or vendoring
+  mbedTLS. Isolate it inside `WsClient` so nothing else changes.
+- **Authentication** — the contract has no auth; a gateway token could
+  ride as a header in `Ws::BuildRequest` or as a first `command`.
+- **Controller events** — `controller_updated`/`controller_removed` are
+  reserved in the spec; wire `OnControllerPositionUpdate`/`Disconnect`
+  through the same EmitEvent path.
+- **Outbound queueing policy** — currently events during a disconnect are
+  dropped (snapshot restores consistency). If a gateway needs gapless
+  history, add sequence numbers to events first.

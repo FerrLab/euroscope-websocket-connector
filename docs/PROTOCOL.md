@@ -5,10 +5,11 @@ directions: a backend/frontend sends **commands** to the plugin; the plugin
 answers each command with a **response** and pushes unsolicited **events**
 (flight updated, flight removed, position updated).
 
-It is transport-independent: today it can be exercised through the
-`.wsc json <message>` and `.wsc events` commands; phase 2 carries exactly
-these messages over WebSocket. Implemented in
-[`src/JsonApi.cpp`](../src/JsonApi.cpp) — keep code and this spec in sync.
+The contract is transport-independent — it can be exercised through the
+`.wsc json <message>` and `.wsc events` commands — and is carried over
+**WebSocket** by the plugin's gateway connection (see *Transport* below).
+Implemented in [`src/JsonApi.cpp`](../src/JsonApi.cpp) — keep code and this
+spec in sync.
 
 - Encoding: UTF-8 JSON, one JSON object per message.
   **Stick to ASCII for anything that reaches the VATSIM network**
@@ -97,14 +98,37 @@ EuroScope's command line, not that it was delivered on the network.
 | `flight_updated` | A flight plan appears or changes — filed data **or** controller-assigned data (consumers get the full fresh object either way) | subject | FlightObject |
 | `flight_removed` | The flight plan leaves the session (pilot disconnect / out of range) | subject | `{}` |
 | `position_updated` | A radar target gets a new position (every few seconds per target; also for targets without a flight plan) | subject | `{ "latitude": 48.35, "longitude": 11.78, "flightLevel": 12000, "groundSpeed": 250, "squawk": "1000" }` |
+| `session_snapshot` | Right after the plugin (re)connects to the gateway — rebuild your world from it before consuming incremental events | — | `{ "count": N, "flights": [ FlightObject, ... ] }` |
 
-Reserved for phase 2 (not emitted yet): `controller_updated`,
-`controller_removed`, `session_snapshot`, `metar`.
+Reserved (not emitted yet): `controller_updated`, `controller_removed`,
+`metar`.
 
-Today the event stream can be inspected with `.wsc events on` (flight
-events) and `.wsc events pos on` (position events — noisy) — the plugin
-prints each event JSON to the WSC chat tab exactly as it will be sent over
-the socket in phase 2.
+The event stream can be inspected without a gateway: `.wsc events on`
+(flight events) and `.wsc events pos on` (position events — noisy) print
+each event JSON to the WSC chat tab exactly as it goes over the socket.
+
+## Transport
+
+The plugin is a **WebSocket client** (RFC 6455) that dials out to a
+gateway, StripCol-style:
+
+- Configure and connect: `.wsc gateway url ws://host:port/path`, then
+  `.wsc gateway connect` (see [COMMANDS.md](COMMANDS.md) §8; the URL and
+  the auto-connect/positions flags persist in the EuroScope settings).
+- `ws://` only — no TLS yet. Run the gateway on localhost/LAN, or tunnel.
+- One JSON message per **text frame**. The plugin answers Pings, sends its
+  own Ping every ~30 s, and reconnects automatically with exponential
+  backoff (2 s → 60 s).
+- On every (re)connect the plugin sends `session_snapshot` first, then
+  incremental events. Events produced while disconnected are **dropped**,
+  not queued — the snapshot makes the peer consistent again.
+- `position_updated` forwarding can be disabled (`.wsc gateway pos off`)
+  to reduce traffic; `flight_updated`/`flight_removed`/`session_snapshot`
+  are always sent while connected.
+- The gateway sends `command` messages at any time; each is answered with
+  a `response`. Commands are applied on EuroScope's main thread once per
+  second, so expect up to ~1 s of latency plus a small batch of queued
+  responses arriving together.
 
 ## FlightObject
 

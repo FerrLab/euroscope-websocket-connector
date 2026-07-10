@@ -19,10 +19,11 @@
 #include "EuroScopePlugIn.h"
 
 #include "Actions.h"
+#include "Gateway.h"
 #include "JsonApi.h"
 
 #define PLUGIN_NAME "WebSocket Connector"
-#define PLUGIN_VERSION "0.2.0"
+#define PLUGIN_VERSION "0.3.0"
 #define PLUGIN_AUTHOR "FerrLab"
 #define PLUGIN_COPYRIGHT "MIT License - github.com/FerrLab/euroscope-websocket-connector"
 
@@ -48,14 +49,33 @@ public:
     void OnFlightPlanDisconnect(EuroScopePlugIn::CFlightPlan FlightPlan) override;
     void OnRadarTargetPositionUpdate(EuroScopePlugIn::CRadarTarget RadarTarget) override;
 
+    // 1 Hz heartbeat: pumps the gateway (reconnects, inbound commands,
+    // snapshot on connect). This is the ONLY place gateway traffic touches
+    // the EuroScope API, keeping everything main-thread.
+    void OnTimer(int Counter) override;
+
 private:
     Actions m_actions;
     JsonApi m_jsonApi;
+    Gateway m_gateway;
 
-    // Event-stream toggles (".wsc events ..."). Position events are
-    // separate because they fire for every target every few seconds.
+    // Event-stream toggles (".wsc events ...") - printing to the chat tab.
+    // Position events are separate because they fire for every target
+    // every few seconds.
     bool m_flightEvents = false;
     bool m_positionEvents = false;
+
+    // Send position_updated events to the gateway (persisted setting;
+    // flight events always go when connected).
+    bool m_gatewayPositions = true;
+
+    void LoadSettings();
+    void SaveSetting(const char* name, const char* description,
+                     const std::string& value);
+
+    // Routes one event JSON to every active consumer (chat tab print,
+    // gateway when connected).
+    void EmitEvent(const std::string& eventJson, bool isPosition);
 
     // Writes one line to the "WSC" chat handler.
     void Say(const std::string& text);
@@ -76,4 +96,5 @@ private:
     void CmdFreq(const std::vector<std::string>& tokens, const std::string& line);
     void CmdJson(const std::vector<std::string>& tokens, const std::string& line);
     void CmdEvents(const std::vector<std::string>& tokens);
+    void CmdGateway(const std::vector<std::string>& tokens);
 };

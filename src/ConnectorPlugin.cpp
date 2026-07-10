@@ -217,8 +217,35 @@ ConnectorPlugin::ConnectorPlugin()
       m_actions(this),
       m_jsonApi(m_actions)
 {
+    LoadSettings();
     Say(std::string(PLUGIN_NAME) + " v" PLUGIN_VERSION
         " loaded. Type '.wsc help' for available commands.");
+    if (m_gateway.IsEnabled())
+        Say("Auto-connecting to gateway " + m_gateway.GetUrl() + " ...");
+}
+
+void ConnectorPlugin::LoadSettings()
+{
+    const char* url = GetDataFromSettings("GatewayUrl");
+    if (url && *url)
+    {
+        const std::string error = m_gateway.SetUrl(url);
+        if (!error.empty())
+            Say(std::string("Saved gateway URL is invalid: ") + error);
+    }
+    const char* positions = GetDataFromSettings("GatewayPositions");
+    if (positions && *positions)
+        m_gatewayPositions = std::string(positions) != "0";
+
+    const char* autoConnect = GetDataFromSettings("GatewayAuto");
+    if (autoConnect && std::string(autoConnect) == "1" && m_gateway.HasValidUrl())
+        m_gateway.Enable();
+}
+
+void ConnectorPlugin::SaveSetting(const char* name, const char* description,
+                                  const std::string& value)
+{
+    SaveDataToSettings(name, description, value.c_str());
 }
 
 ConnectorPlugin::~ConnectorPlugin() = default;
@@ -273,6 +300,8 @@ bool ConnectorPlugin::OnCompileCommand(const char* sCommandLine)
         CmdJson(tokens, line);
     else if (sub == "events")
         CmdEvents(tokens);
+    else if (sub == "gateway")
+        CmdGateway(tokens);
     else
         Say("Unknown sub-command '" + tokens[1] + "'. Type '.wsc help'.");
 
@@ -295,6 +324,8 @@ void ConnectorPlugin::CmdHelp()
     Say(".wsc freq <text>              - text to primary frequency (experimental, UI injection)");
     Say(".wsc json <message>           - run a JSON contract command (docs/PROTOCOL.md)");
     Say(".wsc events <on|off|pos on|pos off|status> - print the JSON event stream");
+    Say(".wsc gateway url <ws://host:port/> | connect | disconnect | status");
+    Say(".wsc gateway auto <on|off> | pos <on|off>  - autoconnect / send positions");
 }
 
 void ConnectorPlugin::CmdList(const std::vector<std::string>& tokens)
@@ -505,17 +536,26 @@ void ConnectorPlugin::CmdEvents(const std::vector<std::string>& tokens)
 }
 
 // ---------------------------------------------------------------------
-// event callbacks -> JSON event stream
+// event callbacks -> JSON event stream (chat print + gateway)
 // ---------------------------------------------------------------------
+
+void ConnectorPlugin::EmitEvent(const std::string& eventJson, bool isPosition)
+{
+    if (isPosition ? m_positionEvents : m_flightEvents)
+        Say(eventJson);
+    if (m_gateway.IsConnected() && (!isPosition || m_gatewayPositions))
+        m_gateway.Send(eventJson);
+}
 
 void ConnectorPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan FlightPlan)
 {
-    if (!m_flightEvents || !FlightPlan.IsValid())
+    // Cheap guard: don't build JSON nobody consumes.
+    if ((!m_flightEvents && !m_gateway.IsConnected()) || !FlightPlan.IsValid())
         return;
     FlightInfo info;
     std::string error;
     if (m_actions.GetFlight(FlightPlan.GetCallsign() ? FlightPlan.GetCallsign() : "", info, error))
-        Say(m_jsonApi.EventFlightUpdated(info));
+        EmitEvent(m_jsonApi.EventFlightUpdated(info), false);
 }
 
 void ConnectorPlugin::OnFlightPlanControllerAssignedDataUpdate(
@@ -528,15 +568,17 @@ void ConnectorPlugin::OnFlightPlanControllerAssignedDataUpdate(
 
 void ConnectorPlugin::OnFlightPlanDisconnect(EuroScopePlugIn::CFlightPlan FlightPlan)
 {
-    if (!m_flightEvents || !FlightPlan.IsValid())
+    if ((!m_flightEvents && !m_gateway.IsConnected()) || !FlightPlan.IsValid())
         return;
     const char* callsign = FlightPlan.GetCallsign();
-    Say(m_jsonApi.EventFlightRemoved(callsign ? callsign : ""));
+    EmitEvent(m_jsonApi.EventFlightRemoved(callsign ? callsign : ""), false);
 }
 
 void ConnectorPlugin::OnRadarTargetPositionUpdate(EuroScopePlugIn::CRadarTarget RadarTarget)
 {
-    if (!m_positionEvents || !RadarTarget.IsValid())
+    const bool anyConsumer =
+        m_positionEvents || (m_gateway.IsConnected() && m_gatewayPositions);
+    if (!anyConsumer || !RadarTarget.IsValid())
         return;
     PositionUpdate pos;
     const char* callsign = RadarTarget.GetCallsign();
@@ -547,5 +589,107 @@ void ConnectorPlugin::OnRadarTargetPositionUpdate(EuroScopePlugIn::CRadarTarget 
     pos.groundSpeed = RadarTarget.GetPosition().GetReportedGS();
     const char* squawk = RadarTarget.GetPosition().GetSquawk();
     pos.squawk = squawk ? squawk : "";
-    Say(m_jsonApi.EventPositionUpdated(pos));
+    EmitEvent(m_jsonApi.EventPositionUpdated(pos), true);
+}
+
+// ---------------------------------------------------------------------
+// gateway pump (1 Hz) and command
+// ---------------------------------------------------------------------
+
+void ConnectorPlugin::OnTimer(int /*Counter*/)
+{
+    const bool wasConnected = m_gateway.IsConnected();
+
+    bool justConnected = false;
+    const std::vector<std::string> inbound = m_gateway.Tick(justConnected);
+
+    if (justConnected)
+    {
+        Say("Gateway connected: " + m_gateway.GetUrl());
+        // Snapshot first, so the peer has the full state before any
+        // incremental events or command responses arrive.
+        m_gateway.Send(m_jsonApi.EventSessionSnapshot(m_actions.CollectFlights("")));
+    }
+    else if (wasConnected && !m_gateway.IsConnected() && m_gateway.IsEnabled())
+    {
+        Say("Gateway connection lost (" + m_gateway.GetStatus().lastError +
+            ") - reconnecting with backoff.");
+    }
+
+    for (const std::string& message : inbound)
+        m_gateway.Send(m_jsonApi.HandleMessage(message));
+}
+
+void ConnectorPlugin::CmdGateway(const std::vector<std::string>& tokens)
+{
+    const std::string a = tokens.size() > 2 ? Lower(tokens[2]) : "status";
+    const std::string b = tokens.size() > 3 ? tokens[3] : "";
+
+    if (a == "url")
+    {
+        if (b.empty())
+        {
+            Say("Usage: .wsc gateway url ws://host:port/path");
+            return;
+        }
+        const std::string error = m_gateway.SetUrl(b);
+        if (!error.empty())
+        {
+            Say("Invalid gateway URL: " + error);
+            return;
+        }
+        SaveSetting("GatewayUrl", "WebSocket gateway URL", b);
+        Say("Gateway URL set to " + b +
+            (m_gateway.IsEnabled() ? " (reconnecting)" : " - '.wsc gateway connect' to connect"));
+    }
+    else if (a == "connect")
+    {
+        const std::string error = m_gateway.Enable();
+        Say(error.empty() ? "Connecting to " + m_gateway.GetUrl() + " ..." : error);
+    }
+    else if (a == "disconnect")
+    {
+        m_gateway.Disable();
+        Say("Gateway disconnected.");
+    }
+    else if (a == "auto")
+    {
+        if (b != "on" && b != "off")
+        {
+            Say("Usage: .wsc gateway auto <on|off>");
+            return;
+        }
+        SaveSetting("GatewayAuto", "Auto-connect to the gateway on load",
+                    b == "on" ? "1" : "0");
+        Say(std::string("Gateway auto-connect ") + (b == "on" ? "ON" : "off") +
+            " (takes effect on plugin load).");
+    }
+    else if (a == "pos")
+    {
+        if (b != "on" && b != "off")
+        {
+            Say("Usage: .wsc gateway pos <on|off>");
+            return;
+        }
+        m_gatewayPositions = b == "on";
+        SaveSetting("GatewayPositions", "Send position events to the gateway",
+                    m_gatewayPositions ? "1" : "0");
+        Say(std::string("Position events to gateway ") +
+            (m_gatewayPositions ? "ON" : "off") + ".");
+    }
+    else if (a == "status")
+    {
+        const Gateway::Status s = m_gateway.GetStatus();
+        Say("Gateway: " + s.state + "   URL: " + s.url);
+        Say("Sent: " + std::to_string(s.sent) +
+            "   Received: " + std::to_string(s.received) +
+            "   Dropped (while offline): " + std::to_string(s.dropped) +
+            "   Positions: " + (m_gatewayPositions ? "on" : "off"));
+        if (!s.lastError.empty())
+            Say("Last error: " + s.lastError);
+    }
+    else
+    {
+        Say("Usage: .wsc gateway <url ws://...|connect|disconnect|auto on|off|pos on|off|status>");
+    }
 }
