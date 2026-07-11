@@ -23,7 +23,13 @@
 #include "JsonApi.h"
 
 #define PLUGIN_NAME "WebSocket Connector"
-#define PLUGIN_VERSION "0.5.0"
+// Release builds stamp the real semantic version at compile time
+// (cmake -DPLUGIN_VERSION=x.y.z, done by the release job in
+// .github/workflows/ci.yml). The fallback makes local builds
+// unmistakable in the load banner: "v0.0.0-dev".
+#ifndef PLUGIN_VERSION
+#define PLUGIN_VERSION "0.0.0-dev"
+#endif
 #define PLUGIN_AUTHOR "FerrLab"
 #define PLUGIN_COPYRIGHT "MIT License - github.com/FerrLab/euroscope-websocket-connector"
 

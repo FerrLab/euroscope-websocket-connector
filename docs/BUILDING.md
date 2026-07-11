@@ -99,6 +99,18 @@ every pull request and push to `main`:
   the only compile of the EuroScope-facing code against the real Windows
   headers — plus the `json_api` test under MSVC. The built DLL is
   uploaded as a workflow artifact.
+- **Release job** (pushes to `main` only, after both jobs pass) — bumps
+  the semantic version from the latest `vX.Y.Z` git tag (patch by
+  default; put `[minor]` or `[major]` in the commit message for bigger
+  bumps), rebuilds the DLL with the version compiled in
+  (`-DPLUGIN_VERSION=X.Y.Z`), and publishes a GitHub Release with the
+  DLL attached. **Grab release DLLs from the Releases page**, not from
+  local build trees.
+
+Version identification: a locally built plugin announces itself as
+**`v0.0.0-dev`** in the WSC tab; only release builds carry a real
+version. If EuroScope greets you with a version that doesn't match what
+you expect, you loaded a stale DLL.
 
 The *plugin* itself still deliberately has no non-Windows build path:
 don't add Linux-only tooling to the core sources (`src/`); only `tests/`

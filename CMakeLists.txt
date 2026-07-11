@@ -47,6 +47,14 @@ target_compile_definitions(WebSocketConnector PRIVATE
     NOMINMAX
 )
 
+# Release builds stamp the semantic version into the plugin
+# (cmake -B build -A Win32 -DPLUGIN_VERSION=0.6.1); without it, local
+# builds identify themselves as "0.0.0-dev" (src/ConnectorPlugin.h).
+if(DEFINED PLUGIN_VERSION)
+    target_compile_definitions(WebSocketConnector PRIVATE
+        PLUGIN_VERSION="${PLUGIN_VERSION}")
+endif()
+
 target_include_directories(WebSocketConnector PRIVATE sdk src third_party)
 target_link_libraries(WebSocketConnector PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk/EuroScopePlugInDll.lib"

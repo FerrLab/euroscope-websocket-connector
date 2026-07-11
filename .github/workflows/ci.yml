@@ -1,6 +1,6 @@
 # CI for the EuroScope WebSocket Connector.
 #
-# Two jobs, mirroring the "Verification status" section of docs/BUILDING.md:
+# Jobs, mirroring the "Verification status" section of docs/BUILDING.md:
 #
 #   tests   (Linux)   — the standalone test project (tests/CMakeLists.txt).
 #                       This is the ONLY place the http_gateway transport
@@ -11,6 +11,14 @@
 #                       the EuroScope-facing code against the vendored SDK
 #                       and real Windows headers (which the Linux job never
 #                       touches), plus the json_api test under MSVC.
+#
+#   release (Windows) — push-to-main only, after tests+plugin pass: bumps
+#                       the semantic version (patch by default; "[minor]" /
+#                       "[major]" in the commit message bumps those),
+#                       rebuilds the DLL with the version stamped in
+#                       (-DPLUGIN_VERSION), and publishes a GitHub Release
+#                       "vX.Y.Z" with the DLL attached. Local builds
+#                       identify as "0.0.0-dev".
 #
 # Keep the jobs in sync with docs/BUILDING.md's CI note.
 
@@ -26,7 +34,7 @@ jobs:
     name: Test suite (Linux)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Configure
         run: cmake -S tests -B build-tests -DCMAKE_BUILD_TYPE=Release
@@ -41,7 +49,7 @@ jobs:
     name: Plugin DLL (Windows, Win32)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       # EuroScope is a 32-bit application; -A Win32 is mandatory
       # (the root CMakeLists refuses to configure for anything else).
@@ -61,8 +69,63 @@ jobs:
         run: ctest --test-dir build-tests -C Release --output-on-failure
 
       - name: Upload DLL artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: WebSocketConnector
           path: build/Release/WebSocketConnector.dll
           if-no-files-found: error
+
+  release:
+    name: Release (semver DLL)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [tests, plugin]
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: release-main
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # full history: the version is derived from tags
+
+      - name: Compute next version
+        id: semver
+        shell: bash
+        run: |
+          latest=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
+          if [ -z "$latest" ]; then
+            # First release; matches the plugin's historical version.
+            next="0.5.0"
+          else
+            IFS=. read -r major minor patch <<< "${latest#v}"
+            message=$(git log -1 --pretty=%B)
+            if echo "$message" | grep -qi '\[major\]'; then
+              next="$((major + 1)).0.0"
+            elif echo "$message" | grep -qi '\[minor\]'; then
+              next="$major.$((minor + 1)).0"
+            else
+              next="$major.$minor.$((patch + 1))"
+            fi
+          fi
+          echo "computed $next (previous: ${latest:-none})"
+          echo "version=$next" >> "$GITHUB_OUTPUT"
+
+      # Quoted: PowerShell splits an unquoted -D token at the dots.
+      - name: Configure (32-bit MSVC, stamped version)
+        run: cmake -B build-release -A Win32 "-DPLUGIN_VERSION=${{ steps.semver.outputs.version }}"
+
+      - name: Build Release DLL
+        run: cmake --build build-release --config Release
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ steps.semver.outputs.version }}" \
+            "build-release/Release/WebSocketConnector.dll" \
+            --target "$GITHUB_SHA" \
+            --title "v${{ steps.semver.outputs.version }}" \
+            --generate-notes
