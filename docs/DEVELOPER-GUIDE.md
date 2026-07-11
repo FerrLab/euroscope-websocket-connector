@@ -124,10 +124,17 @@ override in `ConnectorPlugin`, a row in PROTOCOL.md's event table.
 7. **There is NO chat-send API** (verified against the full compat-16
    header: the chat callbacks are receive-only; `DisplayUserMessage` is
    local-only). `ChatInjection` types into EuroScope's command-line edit
-   control (`WM_SETTEXT` + synthesized ENTER / FREQ key) — undocumented UI
-   behaviour that may break with any EuroScope release. It is deliberately
-   isolated in its own module with rich failure diagnostics; if it breaks,
-   nothing else is affected. Re-verify after every EuroScope upgrade.
+   control (`WM_SETTEXT`) and **posts** the ENTER / FREQ key through the
+   thread message queue — it must be `PostMessage`, never `SendMessage`:
+   EuroScope handles command-line keys in its MFC message pump
+   (`PreTranslateMessage`), which never sees sent messages (verified live —
+   `SendMessage`'d keys were silently ignored). Because posted keys are
+   processed only after the plugin callback returns, the consumed-check is
+   deferred to the next `OnTimer` tick (`ChatInjection::Pump()`), which
+   also serializes queued sends. Undocumented UI behaviour that may break
+   with any EuroScope release; deliberately isolated in its own module —
+   if it breaks, nothing else is affected. Re-verify after every EuroScope
+   upgrade.
 
 8. **Compatibility code.** The `CPlugIn` constructor passes
    `COMPATIBILITY_CODE` (16) from the vendored header; EuroScope refuses
@@ -185,7 +192,9 @@ test procedure:
 4. For `ChatInjection`, verify both the success path and the failure path
    (e.g. `.wsc msg NOSUCHUSER hi` — EuroScope accepts the command, so the
    *plugin* reports success; delivery failure shows in EuroScope's own
-   chat, which is expected and documented behaviour).
+   chat, which is expected and documented behaviour). Note the verdict
+   ("sent" / "FAILED") arrives in the WSC tab up to a second after the
+   command — the keystroke is posted and verified on the next timer tick.
 
 ## Transport status & what's next
 

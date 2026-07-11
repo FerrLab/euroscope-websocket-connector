@@ -3,7 +3,10 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+#include <deque>
 #include <vector>
+
+#include "InjectionVerdict.h"
 
 namespace
 {
@@ -99,12 +102,14 @@ namespace
         return lp;
     }
 
-    void PressKey(HWND target, WORD vk)
+    // POSTED so the keystroke travels through the thread message queue and
+    // is seen by EuroScope's message pump (PreTranslateMessage), exactly
+    // like a physical key press. No explicit WM_CHAR: the pump's own
+    // TranslateMessage generates it from the posted WM_KEYDOWN.
+    void PostKey(HWND target, WORD vk)
     {
-        SendMessageA(target, WM_KEYDOWN, vk, KeyLParam(vk, false));
-        if (vk == VK_RETURN)
-            SendMessageA(target, WM_CHAR, '\r', KeyLParam(vk, false));
-        SendMessageA(target, WM_KEYUP, vk, KeyLParam(vk, true));
+        PostMessageA(target, WM_KEYDOWN, vk, KeyLParam(vk, false));
+        PostMessageA(target, WM_KEYUP, vk, KeyLParam(vk, true));
     }
 
     std::string GetEditText(HWND edit)
@@ -115,60 +120,155 @@ namespace
         return buffer;
     }
 
-    ChatInjection::SendResult Inject(const std::string& text, WORD sendKey)
+    void SetEditText(HWND edit, const std::string& text)
     {
-        ChatInjection::SendResult result;
+        SendMessageA(edit, WM_SETTEXT, 0,
+                     reinterpret_cast<LPARAM>(text.c_str()));
+    }
 
+    // ---- send queue -----------------------------------------------------
+    //
+    // One send is in flight at a time: its text sits in the command line
+    // until the posted key is processed, so a second WM_SETTEXT before the
+    // next Pump() would clobber it. Further sends wait in g_queue.
+
+    struct PendingSend
+    {
+        std::string text;
+        std::string label;
+        WORD key = 0;
+    };
+
+    struct InFlight
+    {
+        bool active = false;
+        HWND edit = nullptr;
+        std::string text;
+        std::string previous; // what the controller had typed before us
+        std::string label;
+    };
+
+    std::deque<PendingSend> g_queue;
+    InFlight g_inFlight;
+
+    // Writes the text into the command line and posts the key; fills
+    // g_inFlight for the next Pump() to resolve.
+    bool Dispatch(const PendingSend& send, std::string& errorOut)
+    {
         std::string detail;
         HWND edit = FindCommandLineEdit(detail);
         if (!edit)
         {
-            result.detail = "command line not found: " + detail;
-            return result;
+            errorOut = "command line not found: " + detail;
+            return false;
         }
 
-        const std::string previous = GetEditText(edit);
+        g_inFlight.active = true;
+        g_inFlight.edit = edit;
+        g_inFlight.text = send.text;
+        g_inFlight.previous = GetEditText(edit);
+        g_inFlight.label = send.label;
 
-        SendMessageA(edit, WM_SETTEXT, 0,
-                     reinterpret_cast<LPARAM>(text.c_str()));
-        PressKey(edit, sendKey);
+        SetEditText(edit, send.text);
+        PostKey(edit, send.key);
+        return true;
+    }
 
-        // EuroScope clears the command line when it consumes the content.
-        // If our text is still sitting there, the send did not happen.
-        const std::string after = GetEditText(edit);
-        if (after == text)
+    ChatInjection::SendResult Enqueue(const std::string& text,
+                                      const std::string& label, WORD key)
+    {
+        ChatInjection::SendResult result;
+
+        if (g_inFlight.active || !g_queue.empty())
         {
-            SendMessageA(edit, WM_SETTEXT, 0,
-                         reinterpret_cast<LPARAM>(previous.c_str()));
-            result.detail =
-                "EuroScope did not consume the command line content "
-                "(previous content restored). If this persists, this "
-                "EuroScope version may not support injection - see "
-                "docs/COMMANDS.md";
+            g_queue.push_back({text, label, key});
+            result.ok = true;
+            result.detail = "queued behind a pending send - result follows "
+                            "in the WSC tab";
             return result;
         }
 
-        // Put back whatever the controller was typing before we hijacked
-        // the command line.
-        if (!previous.empty())
-            SendMessageA(edit, WM_SETTEXT, 0,
-                         reinterpret_cast<LPARAM>(previous.c_str()));
-
+        std::string error;
+        if (!Dispatch({text, label, key}, error))
+        {
+            result.detail = error;
+            return result;
+        }
         result.ok = true;
-        result.detail = "sent";
+        result.detail = "handed to EuroScope - result follows in the WSC tab";
         return result;
     }
 }
 
 namespace ChatInjection
 {
-    SendResult SendCommandLine(const std::string& text)
+    SendResult SendCommandLine(const std::string& text,
+                               const std::string& label)
     {
-        return Inject(text, VK_RETURN);
+        return Enqueue(text, label, VK_RETURN);
     }
 
-    SendResult SendToPrimaryFrequency(const std::string& text)
+    SendResult SendToPrimaryFrequency(const std::string& text,
+                                      const std::string& label)
     {
-        return Inject(text, VK_MULTIPLY);
+        return Enqueue(text, label, VK_MULTIPLY);
+    }
+
+    std::vector<Outcome> Pump()
+    {
+        std::vector<Outcome> outcomes;
+
+        if (g_inFlight.active)
+        {
+            const InFlight f = g_inFlight;
+            g_inFlight = InFlight{};
+
+            Outcome o;
+            if (!IsWindow(f.edit))
+            {
+                o.detail = f.label + ": FAILED - the command-line window "
+                                     "disappeared before the send could be "
+                                     "verified";
+            }
+            else
+            {
+                switch (JudgeInjection(f.text, GetEditText(f.edit)))
+                {
+                case InjectionVerdict::Consumed:
+                    if (!f.previous.empty())
+                        SetEditText(f.edit, f.previous);
+                    o.ok = true;
+                    o.detail = f.label + ": sent";
+                    break;
+                case InjectionVerdict::NotConsumed:
+                    SetEditText(f.edit, f.previous);
+                    o.detail = f.label +
+                               ": FAILED - EuroScope did not consume the "
+                               "injected text (previous content restored). "
+                               "If this persists, this EuroScope version may "
+                               "not support injection - see docs/COMMANDS.md";
+                    break;
+                case InjectionVerdict::Overwritten:
+                    // The controller is typing again; assume the send
+                    // happened and keep our hands off the command line.
+                    o.ok = true;
+                    o.detail = f.label + ": probably sent (the command line "
+                                         "was already back in use)";
+                    break;
+                }
+            }
+            outcomes.push_back(o);
+        }
+
+        if (!g_inFlight.active && !g_queue.empty())
+        {
+            const PendingSend next = g_queue.front();
+            g_queue.pop_front();
+            std::string error;
+            if (!Dispatch(next, error))
+                outcomes.push_back({false, next.label + ": FAILED - " + error});
+        }
+
+        return outcomes;
     }
 }

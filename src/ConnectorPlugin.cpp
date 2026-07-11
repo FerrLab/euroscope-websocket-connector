@@ -490,8 +490,9 @@ void ConnectorPlugin::CmdMsg(const std::vector<std::string>& tokens, const std::
     const std::string text = RemainderAfterTokens(line, 3);
     // ".msg <callsign> <text>" is EuroScope's own private-message command;
     // we type it into the command line on the controller's behalf.
-    const auto r = ChatInjection::SendCommandLine(".msg " + tokens[2] + " " + text);
-    Say(r.ok ? "Private message to " + tokens[2] + " handed to EuroScope."
+    const auto r = ChatInjection::SendCommandLine(
+        ".msg " + tokens[2] + " " + text, "Private message to " + tokens[2]);
+    Say(r.ok ? "Private message to " + tokens[2] + ": " + r.detail
              : "Private message FAILED: " + r.detail);
 }
 
@@ -503,8 +504,8 @@ void ConnectorPlugin::CmdFreq(const std::vector<std::string>& tokens, const std:
         return;
     }
     const std::string text = RemainderAfterTokens(line, 2);
-    const auto r = ChatInjection::SendToPrimaryFrequency(text);
-    Say(r.ok ? "Text handed to EuroScope for the primary frequency."
+    const auto r = ChatInjection::SendToPrimaryFrequency(text, "Frequency text");
+    Say(r.ok ? "Frequency text: " + r.detail
              : "Frequency text FAILED: " + r.detail);
 }
 
@@ -607,6 +608,11 @@ void ConnectorPlugin::OnRadarTargetPositionUpdate(EuroScopePlugIn::CRadarTarget 
 
 void ConnectorPlugin::OnTimer(int /*Counter*/)
 {
+    // Resolve chat-injection sends whose keystroke was posted on an
+    // earlier tick (deferred verification - see ChatInjection.h).
+    for (const ChatInjection::Outcome& outcome : ChatInjection::Pump())
+        Say(outcome.detail);
+
     const bool wasConnected = m_gateway.IsConnected();
 
     bool justConnected = false;

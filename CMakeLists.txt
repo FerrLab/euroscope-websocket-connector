@@ -29,6 +29,7 @@ add_library(WebSocketConnector SHARED
     src/ConnectorPlugin.cpp
     src/Actions.cpp
     src/ChatInjection.cpp
+    src/InjectionVerdict.cpp
     src/JsonApi.cpp
     src/Gateway.cpp
     src/http/HttpUrl.cpp

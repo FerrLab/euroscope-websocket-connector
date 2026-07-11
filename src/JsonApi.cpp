@@ -266,16 +266,18 @@ std::string JsonApi::HandleMessage(const std::string& messageJson)
                 ar = m_actions.SetStar(RequireCallsign(callsign), RequireString(payload, "star"));
             else if (action == "send_private_message")
             {
+                const std::string cs = RequireCallsign(callsign);
                 const auto r = ChatInjection::SendCommandLine(
-                    ".msg " + RequireCallsign(callsign) + " " + RequireString(payload, "message"));
-                ar = r.ok ? ActionResult::Ok("private message handed to EuroScope")
+                    ".msg " + cs + " " + RequireString(payload, "message"),
+                    "private message to " + cs);
+                ar = r.ok ? ActionResult::Ok("private message " + r.detail)
                           : ActionResult::Fail(r.detail);
             }
             else if (action == "send_frequency_message")
             {
                 const auto r = ChatInjection::SendToPrimaryFrequency(
-                    RequireString(payload, "message"));
-                ar = r.ok ? ActionResult::Ok("frequency message handed to EuroScope")
+                    RequireString(payload, "message"), "frequency message");
+                ar = r.ok ? ActionResult::Ok("frequency message " + r.detail)
                           : ActionResult::Fail(r.detail);
             }
             else if (action.empty())
