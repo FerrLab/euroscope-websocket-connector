@@ -34,7 +34,7 @@ jobs:
       - name: Build
         run: cmake --build build-tests
 
-      - name: Run tests (json_api + http_gateway)
+      - name: Run tests (full suite)
         run: ctest --test-dir build-tests --output-on-failure
 
   plugin:
@@ -57,7 +57,7 @@ jobs:
       - name: Build tests
         run: cmake --build build-tests --config Release
 
-      - name: Run tests (json_api; http_gateway is POSIX-only)
+      - name: Run tests (all but the POSIX-only http_gateway)
         run: ctest --test-dir build-tests -C Release --output-on-failure
 
       - name: Upload DLL artifact
