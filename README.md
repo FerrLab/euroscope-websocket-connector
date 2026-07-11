@@ -1,19 +1,18 @@
 # euroscope-websocket-connector
 
 A [EuroScope](https://www.euroscope.hu/wp/) plugin that connects the
-controller's session to external software over **WebSocket**: it dials out
-to a gateway, streams the session as JSON events (flights, positions,
-snapshots), and accepts JSON commands back (modify flight plans, ground
-states, SID/STAR, messages). Everything is also driven manually via
-`.wsc` dot-commands for testing.
+controller's session to a web backend over plain **HTTPS**: it streams the
+session as JSON messages (flights, positions, snapshots) via `POST` and
+receives JSON commands back (modify flight plans, ground states, SID/STAR,
+messages) via **long polling**. The backend — e.g. a Laravel app — fans the
+data out to browsers however it likes (typically Soketi/Reverb).
+Everything is also driven manually via `.wsc` dot-commands for testing.
 
-> **Status: phase 2+ — WebSocket transport with Pusher compatibility.**
-> The plugin is a reconnecting WebSocket client (`.wsc gateway ...`,
-> zero-dependency RFC 6455 implementation, `ws://` only for now) carrying
-> the standardized JSON contract ([docs/PROTOCOL.md](docs/PROTOCOL.md)) in
-> two modes: **raw** (your own gateway) or **Pusher protocol** (Laravel
-> Reverb / Soketi / Pusher Channels) with private-channel **token
-> authentication** (HMAC-SHA256, minted locally from the app secret).
+> **Status: HTTPS transport (long poll + POST) with bearer-token auth.**
+> TLS, certificate validation and proxies are handled by Windows (WinHTTP)
+> — no third-party network stack. The contract is specified in
+> [docs/PROTOCOL.md](docs/PROTOCOL.md). An earlier WebSocket/Pusher
+> transport was replaced by this design (git history, `ed8ef6c`).
 > Needs real-world testing inside EuroScope — see *Verification status*
 > in [docs/BUILDING.md](docs/BUILDING.md).
 
@@ -54,28 +53,17 @@ The JSON contract for external systems: **[docs/PROTOCOL.md](docs/PROTOCOL.md)**
 
 3. Type `.wsc help` in the command line.
 
-4. Connect — to a Pusher-compatible server (Laravel Reverb, Soketi):
+4. Connect to your backend:
 
    ```
-   .wsc gateway mode pusher
-   .wsc gateway url ws://127.0.0.1:8080
-   .wsc gateway key <app-key>
-   .wsc gateway secret <app-secret>
+   .wsc gateway url https://api.example.com/euroscope
+   .wsc gateway token <bearer-token>
    .wsc gateway connect
    ```
 
-   …or to your own raw WebSocket gateway:
-
-   ```
-   .wsc gateway url ws://127.0.0.1:3000/session
-   .wsc gateway connect
-   ```
-
-   The plugin snapshots the session, streams events, and answers
-   `command` messages per [docs/PROTOCOL.md](docs/PROTOCOL.md).
-
-Test on a [SweatBox/playback session](https://www.euroscope.hu/wp/), not on
-the live network, until you are comfortable with what each command does.
+   The plugin POSTs a `session_snapshot` + live events to
+   `{base}/messages` and long-polls `{base}/poll` for commands, per
+   [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
 ## Documentation
 
@@ -93,8 +81,8 @@ the live network, until you are comfortable with what each command does.
 - EuroScope is **32-bit**; the plugin must be built for **Win32/x86**
   (the announced 64-bit transition is suspended as of March 2026).
 - All plugin callbacks run on **EuroScope's UI thread** — nothing here may
-  block. The future WebSocket layer runs on its own thread and talks to the
-  main thread through a queue (see the developer guide).
+  block. The HTTP transport runs on its own worker threads and talks to the
+  main thread through queues (see the developer guide).
 - The plugin API has **no function to send chat messages**; capabilities
   3 & 4 are implemented by injecting into EuroScope's command line, which is
   undocumented behaviour — treat them as experimental.

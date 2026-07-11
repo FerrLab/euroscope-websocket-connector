@@ -4,9 +4,9 @@ All commands are typed into the EuroScope command line (the edit box at the
 top of the main window) and start with `.wsc`. Callsigns are
 case-insensitive. Output appears in a chat tab named **WSC**.
 
-Anything the plugin does here can later be triggered over WebSocket — the
-commands are a 1:1 manual front end for `Actions` (see
-[DEVELOPER-GUIDE.md](DEVELOPER-GUIDE.md)).
+Everything the plugin does here can also be triggered by the backend over
+the HTTPS gateway — the commands are a 1:1 manual front end for `Actions`
+(see [DEVELOPER-GUIDE.md](DEVELOPER-GUIDE.md)).
 
 ---
 
@@ -211,7 +211,7 @@ STAR (last route token) if present, inserting the new one — and then calls
 
 Feeds one message of the standardized JSON contract
 ([PROTOCOL.md](PROTOCOL.md)) through the plugin and prints the response —
-byte-for-byte what a WebSocket peer will receive in phase 2. Everything
+byte-for-byte what the backend receives over the HTTPS gateway. Everything
 after `.wsc json` is passed through verbatim.
 
 ```
@@ -235,74 +235,57 @@ WSC tab as events happen:
   sessions.
 - `status` — show current toggles.
 
-While a gateway is connected, the same messages also go over the socket —
+While a gateway is connected, the same messages also go to the backend —
 the print toggles and the gateway are independent consumers.
 
 ---
 
 ## 8. Gateway connection
 
-All `gateway` settings persist in the EuroScope settings file.
+All `gateway` settings persist in the EuroScope settings file. The wire
+model — `POST {base}/messages` to send, long-poll `GET {base}/poll` to
+receive — is specified in [PROTOCOL.md](PROTOCOL.md) *Transport*.
 
-### `.wsc gateway url <ws://host:port/path>`
+### `.wsc gateway url <https://host[:port]/base-path>`
 
-Sets the gateway address. `ws://` only — see [PROTOCOL.md](PROTOCOL.md)
-*Transport*. Changing the URL while connected reconnects to the new
-target. (In pusher mode only host/port are used; the path is generated.)
+Sets the backend base URL; the plugin talks to `{base}/messages` and
+`{base}/poll`. `https://` in production (TLS and certificate validation
+are done by Windows/WinHTTP); `http://` is accepted for local
+development. Changing the URL while connected reconnects.
 
-### `.wsc gateway mode <raw|pusher>`
+### `.wsc gateway token <bearer-token>`
 
-Wire protocol. `raw` (default): contract messages go straight over the
-socket to your own gateway. `pusher`: speak the Pusher Channels protocol
-to Laravel Reverb / Soketi / any Pusher-compatible server — see
-[PROTOCOL.md](PROTOCOL.md) *Pusher mode* for the full semantics.
-
-### `.wsc gateway key <app-key>` / `.wsc gateway secret <app-secret>` / `.wsc gateway channel <name>`
-
-Pusher-mode settings. The plugin subscribes to `channel` (default
-`private-euroscope`); for `private-*`/`presence-*` channels it mints the
-standard Pusher **auth token** locally from the app secret
-(HMAC-SHA256 over `socket_id:channel`) — no auth endpoint needed.
-**The secret is stored in plain text in the EuroScope settings file; use a
-dedicated app/secret for this connector.** A channel name without the
-`private-` prefix subscribes publicly, without a token.
-
-```
-.wsc gateway mode pusher
-.wsc gateway url ws://127.0.0.1:8080        (Reverb default port)
-.wsc gateway key my-reverb-key
-.wsc gateway secret my-reverb-secret
-.wsc gateway channel private-euroscope
-.wsc gateway connect
-```
+The token sent as `Authorization: Bearer <token>` on every request — how
+the backend authenticates the plugin and tells sessions apart.
+**Stored in plain text in the EuroScope settings file: use a dedicated,
+revocable token** (e.g. a Laravel Sanctum token), not a personal password.
 
 ### `.wsc gateway connect` / `.wsc gateway disconnect`
 
-Opens/closes the connection. While enabled, the plugin reconnects
-automatically with exponential backoff (2 s → 60 s) and re-sends the
-state snapshot after every (re)connect (`session_snapshot` in raw mode;
-`session_reset` + per-flight `flight_updated` in pusher mode). Fatal
-Pusher errors (bad key, app disabled) park reconnection at the maximum
-backoff instead of hammering the server.
+Starts/stops the transport. While enabled, failures retry with
+exponential backoff (2 s → 60 s); auth failures (401/403) park at the
+maximum until the token is fixed. After every recovery the plugin
+re-sends a `session_snapshot` so the backend is consistent again.
 
 ### `.wsc gateway auto <on|off>`
 
 Persisted: connect automatically when the plugin loads (requires a saved
-URL).
+URL and token).
 
 ### `.wsc gateway pos <on|off>`
 
-Persisted: forward `position_updated` events to the gateway (default on).
+Persisted: forward `position_updated` events to the backend (default on).
 Turn off to cut traffic massively in busy airspace; flight events and
 snapshots are always sent.
 
 ### `.wsc gateway status`
 
-Shows connection state, URL, sent/received/dropped counters and the last
-connection error.
+Shows connection state, URL, whether a token is set, sent/received/
+dropped counters and the last error.
 
 ```
-.wsc gateway url ws://127.0.0.1:3000/session
+.wsc gateway url https://api.example.com/euroscope
+.wsc gateway token 3|x7Jd...
 .wsc gateway connect
 .wsc gateway status
 ```

@@ -7,7 +7,8 @@ answers each command with a **response** and pushes unsolicited **events**
 
 The contract is transport-independent — it can be exercised through the
 `.wsc json <message>` and `.wsc events` commands — and is carried over
-**WebSocket** by the plugin's gateway connection (see *Transport* below).
+plain **HTTPS** by the plugin's gateway connection: long polling to
+receive, POST to send (see *Transport* below).
 Implemented in [`src/JsonApi.cpp`](../src/JsonApi.cpp) — keep code and this
 spec in sync.
 
@@ -98,107 +99,93 @@ EuroScope's command line, not that it was delivered on the network.
 | `flight_updated` | A flight plan appears or changes — filed data **or** controller-assigned data (consumers get the full fresh object either way) | subject | FlightObject |
 | `flight_removed` | The flight plan leaves the session (pilot disconnect / out of range) | subject | `{}` |
 | `position_updated` | A radar target gets a new position (every few seconds per target; also for targets without a flight plan) | subject | `{ "latitude": 48.35, "longitude": 11.78, "flightLevel": 12000, "groundSpeed": 250, "squawk": "1000" }` |
-| `session_snapshot` | Right after the plugin (re)connects in **raw mode** — rebuild your world from it before consuming incremental events | — | `{ "count": N, "flights": [ FlightObject, ... ] }` |
-| `session_reset` | Right after the plugin (re)connects in **Pusher mode**: "clear your world, the full state follows as `flight_updated` events". Used instead of `session_snapshot` because Pusher servers cap message sizes (~10 KB) | — | `{}` |
+| `session_snapshot` | Right after the gateway transport becomes healthy (startup and every recovery) — rebuild your world from it before consuming incremental events | — | `{ "count": N, "flights": [ FlightObject, ... ] }` |
 
 Reserved (not emitted yet): `controller_updated`, `controller_removed`,
 `metar`.
 
 The event stream can be inspected without a gateway: `.wsc events on`
 (flight events) and `.wsc events pos on` (position events — noisy) print
-each event JSON to the WSC chat tab exactly as it goes over the socket.
+each event JSON to the WSC chat tab exactly as it goes over the wire.
 
 ## Transport
 
-Two wire modes, selected with `.wsc gateway mode <raw|pusher>`.
+Plain **HTTPS**: the plugin talks to a backend web application (e.g.
+Laravel) with two endpoints under a configurable base URL. On Windows the
+requests are made with **WinHTTP** — TLS, certificate validation against
+the OS trust store, and proxy settings are handled by the operating
+system. `http://` is accepted for local development.
 
-### Pusher mode (Laravel Reverb, Soketi, Pusher Channels)
+Configuration (persisted): `.wsc gateway url https://host[:port]/base`,
+`.wsc gateway token <bearer-token>`. Both endpoints receive
+`Authorization: Bearer <token>`, `Content-Type: application/json`.
 
-The plugin speaks the **Pusher Channels protocol (protocol 7)** as a
-client, so any Pusher-compatible server relays between the plugin and its
-consumers with zero custom gateway code:
+### Sending — `POST {base}/messages`
 
-- **Connection**: `ws://host:port` from `.wsc gateway url` +
-  `/app/{APP_KEY}?protocol=7&client=euroscope-websocket-connector&version=…`
-  (`.wsc gateway key` sets the app key).
-- **Token authentication**: the plugin subscribes to the configured
-  channel (`.wsc gateway channel`, default **`private-euroscope`**). For
-  `private-*`/`presence-*` channels it presents the standard Pusher auth
-  token, minted locally from the app secret (`.wsc gateway secret`):
+The plugin batches outbound contract messages (events, command responses)
+and POSTs them; batches flush as soon as messages exist (up to 200
+messages / 512 KB per request):
 
-  ```
-  auth = "<app_key>:" + hex( HMAC-SHA256( secret, "<socket_id>:<channel>" ) )
-  ```
-
-  This is byte-for-byte what a Pusher auth endpoint would return, so
-  server-side nothing special is needed — Reverb/Soketi validate it out of
-  the box. Public channels (no `private-` prefix) skip the token. The
-  secret is stored in the EuroScope settings file in plain text — use a
-  dedicated app/secret for this connector, not your main application's.
-- **Messages**: every contract message rides as a **client event** named
-  **`client-euroscope`** on the channel, with the contract JSON
-  double-encoded in `data` (the Pusher convention). Both directions use
-  the same event name; the contract's `type` field distinguishes
-  events/responses from commands. The plugin answers `pusher:ping`,
-  handles `pusher:error` (fatal codes 4000–4099 park reconnection at the
-  maximum backoff), and re-subscribes automatically after reconnects.
-- **Snapshot**: on every (re)subscribe the plugin sends `session_reset`
-  followed by one `flight_updated` per flight (not one big
-  `session_snapshot` — Pusher servers cap message size, ~10 KB default).
-- **Server requirements**: client events must be enabled for the app
-  (Reverb: `'enable_client_messages' => true`; Soketi:
-  `enableClientMessages`). Watch event-rate limits — with positions on,
-  busy airspace produces one `client-euroscope` event per aircraft every
-  few seconds (hosted pusher.com's 10 msg/s client-event limit is easily
-  exceeded; self-hosted Reverb/Soketi limits are configurable). And note
-  the transport is still `ws://` — see the TLS caveat below, which rules
-  out hosted pusher.com until `wss://` lands.
-
-A browser consumer needs nothing beyond plain `pusher-js` (channel auth
-handled by your app's usual auth endpoint):
-
-```js
-const channel = pusher.subscribe('private-euroscope');
-
-channel.bind('client-euroscope', (data) => {
-  const msg = typeof data === 'string' ? JSON.parse(data) : data;
-  // msg = { type, callsign, action, payload } per this spec
-});
-
-// send a command to the plugin:
-channel.trigger('client-euroscope', JSON.stringify({
-  type: 'command', id: 1, callsign: 'DLH4TX',
-  action: 'set_ground_state', payload: { state: 'PUSH' },
-}));
+```json
+{ "messages": [ { "type": "event", "action": "flight_updated", "...": "..." },
+                { "type": "response", "id": 7, "...": "..." } ] }
 ```
 
-(With laravel-echo, `Echo.private('euroscope')` + `channel.listen`/
-`channel.whisper` wrap the same primitives; whispers arrive as
-`client-<name>` events, so `whisper('euroscope', …)` pairs with the
-plugin's `client-euroscope`.)
+Any `2xx` acknowledges the batch. The backend typically re-broadcasts
+these to browsers (e.g. via Soketi/Reverb — that fan-out is now entirely
+server-side and out of the plugin's scope).
 
-### Raw mode
+### Receiving — `GET {base}/poll?timeout=25` (long poll)
 
-The plugin is a plain **WebSocket client** (RFC 6455) that dials out to
-your own gateway, StripCol-style:
+The plugin keeps one long poll open at all times. The server should hold
+the request until it has commands for this plugin (identified by the
+token) or the `timeout` hint (seconds) expires, then answer:
 
-- Configure and connect: `.wsc gateway url ws://host:port/path`, then
-  `.wsc gateway connect` (see [COMMANDS.md](COMMANDS.md) §8; the URL and
-  the auto-connect/positions flags persist in the EuroScope settings).
-- `ws://` only — no TLS yet. Run the gateway on localhost/LAN, or tunnel.
-- One JSON message per **text frame**. The plugin answers Pings, sends its
-  own Ping every ~30 s, and reconnects automatically with exponential
-  backoff (2 s → 60 s).
-- On every (re)connect the plugin sends `session_snapshot` first, then
-  incremental events. Events produced while disconnected are **dropped**,
-  not queued — the snapshot makes the peer consistent again.
-- `position_updated` forwarding can be disabled (`.wsc gateway pos off`)
-  to reduce traffic; `flight_updated`/`flight_removed`/`session_snapshot`
-  are always sent while connected.
-- The gateway sends `command` messages at any time; each is answered with
-  a `response`. Commands are applied on EuroScope's main thread once per
-  second, so expect up to ~1 s of latency plus a small batch of queued
-  responses arriving together.
+- `200` with `{ "commands": [ <command message>, ... ] }` (a bare JSON
+  array is also accepted), or
+- `204 No Content` when the hold expired with nothing to deliver.
+
+The plugin re-polls immediately after every response, runs each command
+on the EuroScope main thread, and sends the `response` messages through
+the next POST batch. Expect up to ~1 s of extra latency (main-thread
+pump).
+
+### Failure model
+
+- Transport errors and non-2xx responses put the gateway in an unhealthy
+  state and retries back off exponentially (2 s → 60 s).
+- `401`/`403` park the retry at the maximum immediately — fix the token.
+- Messages produced while unhealthy are **dropped** (and counted in
+  `.wsc gateway status`); on every unhealthy → healthy transition the
+  plugin re-sends a `session_snapshot`, which makes the backend
+  consistent again.
+
+### Backend sketch (Laravel)
+
+```php
+Route::middleware('auth:sanctum')->prefix('euroscope')->group(function () {
+    // Plugin pushes events/responses:
+    Route::post('/messages', function (Request $r) {
+        foreach ($r->input('messages', []) as $m) {
+            ProcessEuroscopeMessage::dispatch($m);   // e.g. broadcast to Soketi
+        }
+        return response()->noContent();
+    });
+    // Plugin long-polls for commands:
+    Route::get('/poll', function (Request $r) {
+        $deadline = now()->addSeconds(min((int) $r->query('timeout', 25), 25));
+        do {
+            $commands = CommandQueue::drainFor($r->user());
+            if ($commands) return response()->json(['commands' => $commands]);
+            usleep(250_000);
+        } while (now() < $deadline);
+        return response()->noContent();
+    });
+});
+```
+
+(Any queue works — database table, Redis list. The only contract is the
+two endpoints above.)
 
 ## FlightObject
 
@@ -315,7 +302,7 @@ Every command failure is a `type:"response"`, `ok:false` message with
    permission to modify the flight, …). The message explains the likely
    cause.
 
-## Testing without a WebSocket
+## Testing without a backend
 
 Type commands directly into EuroScope (everything after `.wsc json` is
 passed through verbatim), and enable the event stream:
@@ -328,8 +315,8 @@ passed through verbatim), and enable the event stream:
 .wsc events pos on
 ```
 
-The printed messages are byte-for-byte what a WebSocket peer will exchange
-in phase 2.
+The printed messages are byte-for-byte what travels over the HTTPS
+transport.
 
 ## Versioning rules
 

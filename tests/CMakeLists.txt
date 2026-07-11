@@ -1,5 +1,5 @@
-# Standalone test project for the platform-independent parts of the plugin
-# (the JSON contract layer). Runs on ANY OS — no Windows, no EuroScope SDK:
+# Standalone test project for the platform-independent parts of the plugin.
+# Runs on ANY OS — no Windows, no EuroScope:
 #
 #   cmake -S tests -B build-tests
 #   cmake --build build-tests
@@ -27,60 +27,25 @@ target_include_directories(json_api_test PRIVATE
 
 add_test(NAME json_api COMMAND json_api_test)
 
-add_executable(ws_test
-    ws_test.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/ws/WsFrame.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/ws/WsHandshake.cpp
-)
-target_compile_features(ws_test PRIVATE cxx_std_17)
-target_include_directories(ws_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
-
-add_test(NAME ws COMMAND ws_test)
-
-add_executable(pusher_test
-    pusher_test.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/pusher/Crypto.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/pusher/PusherSession.cpp
-)
-target_compile_features(pusher_test PRIVATE cxx_std_17)
-target_include_directories(pusher_test PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src
-    ${CMAKE_CURRENT_SOURCE_DIR}/../third_party
-)
-
-add_test(NAME pusher COMMAND pusher_test)
-
-# End-to-end tests: the production client code (POSIX branch) against live
-# in-process servers. UNIX-only; on Windows the client is exercised inside
-# EuroScope itself.
+# End-to-end transport test: the production Gateway (poll/send threads,
+# backoff, auth) over live TCP against a scripted HTTP backend. UNIX-only
+# (the test HTTP client/server use POSIX sockets); on Windows the same
+# Gateway runs on WinHTTP.
 if(UNIX)
     find_package(Threads REQUIRED)
 
-    add_executable(ws_client_test
-        ws_client_test.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ws/WsClient.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ws/WsFrame.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ws/WsHandshake.cpp
-    )
-    target_compile_features(ws_client_test PRIVATE cxx_std_17)
-    target_include_directories(ws_client_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
-    target_link_libraries(ws_client_test PRIVATE Threads::Threads)
-    add_test(NAME ws_client COMMAND ws_client_test)
-
-    add_executable(pusher_e2e_test
-        pusher_e2e_test.cpp
+    add_executable(http_gateway_test
+        http_gateway_test.cpp
+        posix_http_client.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Gateway.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/pusher/Crypto.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/pusher/PusherSession.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ws/WsClient.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ws/WsFrame.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ws/WsHandshake.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/http/HttpUrl.cpp
     )
-    target_compile_features(pusher_e2e_test PRIVATE cxx_std_17)
-    target_include_directories(pusher_e2e_test PRIVATE
+    target_compile_features(http_gateway_test PRIVATE cxx_std_17)
+    target_include_directories(http_gateway_test PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/../src
         ${CMAKE_CURRENT_SOURCE_DIR}/../third_party
+        ${CMAKE_CURRENT_SOURCE_DIR}
     )
-    target_link_libraries(pusher_e2e_test PRIVATE Threads::Threads)
-    add_test(NAME pusher_e2e COMMAND pusher_e2e_test)
+    target_link_libraries(http_gateway_test PRIVATE Threads::Threads)
+    add_test(NAME http_gateway COMMAND http_gateway_test)
 endif()

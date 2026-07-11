@@ -31,11 +31,8 @@ add_library(WebSocketConnector SHARED
     src/ChatInjection.cpp
     src/JsonApi.cpp
     src/Gateway.cpp
-    src/ws/WsFrame.cpp
-    src/ws/WsHandshake.cpp
-    src/ws/WsClient.cpp
-    src/pusher/Crypto.cpp
-    src/pusher/PusherSession.cpp
+    src/http/HttpUrl.cpp
+    src/http/WinHttpClient.cpp
 )
 
 target_compile_features(WebSocketConnector PRIVATE cxx_std_17)
@@ -51,7 +48,7 @@ target_compile_definitions(WebSocketConnector PRIVATE
 target_include_directories(WebSocketConnector PRIVATE sdk src third_party)
 target_link_libraries(WebSocketConnector PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk/EuroScopePlugInDll.lib"
-    ws2_32)
+    winhttp)
 
 # Static CRT so users don't need a matching Visual C++ redistributable.
 set_target_properties(WebSocketConnector PROPERTIES

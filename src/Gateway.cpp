@@ -1,262 +1,393 @@
 #include "Gateway.h"
 
-bool Gateway::ProcessInbound(std::vector<std::string> raw,
-                             std::vector<std::string>& commands,
-                             bool connectionAlive)
-{
-    if (m_mode != GatewayMode::Pusher)
-    {
-        commands = std::move(raw);
-        return false;
-    }
-    if (!m_session)
-        return false;
+#include <nlohmann/json.hpp>
 
-    bool fatal = false;
-    for (const std::string& frame : raw)
+using nlohmann::json;
+
+namespace
+{
+    bool IsAuthStatus(int status)
     {
-        Pusher::PusherSession::Incoming in = m_session->HandleFrame(frame);
-        if (connectionAlive)
-            for (const std::string& reply : in.sendNow)
-                m_client->Send(reply);
-        for (std::string& command : in.commands)
-            commands.push_back(std::move(command));
-        if (!in.notice.empty())
-            m_lastError = in.notice;
-        fatal = fatal || in.fatal;
+        return status == 401 || status == 403;
     }
-    return fatal;
 }
 
-void Gateway::ResetConnection()
+Gateway::Gateway(Http::ClientFactory factory) : m_factory(factory)
 {
-    m_client.reset();
-    m_session.reset();
-    m_wasConnected = false;
-    m_retryDelay = kInitialRetrySeconds;
-    m_retryCountdown = 0;
+#ifdef _WIN32
+    if (!m_factory)
+        m_factory = [] { return Http::CreateWinHttpClient(); };
+#endif
 }
 
-void Gateway::ScheduleRetry(int seconds)
+Gateway::~Gateway()
 {
-    m_client.reset();
-    m_session.reset();
-    m_wasConnected = false;
-    m_retryCountdown = seconds;
+    Disable();
+}
+
+std::unique_ptr<Http::Client> Gateway::MakeClient()
+{
+    return m_factory ? m_factory() : nullptr;
 }
 
 std::string Gateway::SetUrl(const std::string& url)
 {
-    const Ws::Url parsed = Ws::ParseUrl(url);
+    const Http::Url parsed = Http::ParseUrl(url);
     if (!parsed.ok)
         return parsed.error;
 
+    const bool wasEnabled = m_enabled;
+    Disable();
     m_url = parsed;
     m_urlString = url;
-    ResetConnection();
+    if (wasEnabled)
+        Enable();
     return std::string();
 }
 
-void Gateway::SetMode(GatewayMode mode)
+void Gateway::SetToken(const std::string& token)
 {
-    if (m_mode == mode)
-        return;
-    m_mode = mode;
-    ResetConnection();
-}
-
-void Gateway::SetPusherKey(const std::string& key)
-{
-    m_pusherConfig.appKey = key;
-    if (m_mode == GatewayMode::Pusher)
-        ResetConnection();
-}
-
-void Gateway::SetPusherSecret(const std::string& secret)
-{
-    m_pusherConfig.secret = secret;
-    if (m_mode == GatewayMode::Pusher)
-        ResetConnection();
-}
-
-void Gateway::SetPusherChannel(const std::string& channel)
-{
-    m_pusherConfig.channel = channel;
-    if (m_mode == GatewayMode::Pusher)
-        ResetConnection();
-}
-
-void Gateway::SetClientVersion(const std::string& version)
-{
-    m_pusherConfig.clientVersion = version;
+    const bool wasEnabled = m_enabled;
+    Disable();
+    m_token = token;
+    if (wasEnabled)
+        Enable();
 }
 
 std::string Gateway::Enable()
 {
+    if (m_enabled)
+        return std::string();
     if (!m_url.ok)
-        return "no gateway URL configured - use: .wsc gateway url ws://host:port/";
-    if (m_mode == GatewayMode::Pusher)
+        return "no backend URL configured - use: .wsc gateway url https://host/base";
+    if (m_token.empty())
+        return "no auth token configured - use: .wsc gateway token <token>";
+    if (!m_factory)
+        return "no HTTP backend available on this platform";
+
     {
-        if (m_pusherConfig.appKey.empty())
-            return "pusher mode needs an app key - use: .wsc gateway key <app-key>";
-        const bool isPrivate =
-            m_pusherConfig.channel.rfind("private-", 0) == 0 ||
-            m_pusherConfig.channel.rfind("presence-", 0) == 0;
-        if (isPrivate && m_pusherConfig.secret.empty())
-            return "channel '" + m_pusherConfig.channel +
-                   "' needs token auth - use: .wsc gateway secret <app-secret> "
-                   "(or use a public channel name)";
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_stop = false;
+        m_healthy = false;
+        m_outbound.clear();
+        m_inbound.clear();
     }
+    m_connectAnnounced = false;
     m_enabled = true;
-    m_retryCountdown = 0;  // connect on the next tick
-    m_retryDelay = kInitialRetrySeconds;
+    m_pollThread = std::thread(&Gateway::PollLoop, this);
+    m_sendThread = std::thread(&Gateway::SendLoop, this);
     return std::string();
 }
 
 void Gateway::Disable()
 {
+    if (!m_enabled && !m_pollThread.joinable() && !m_sendThread.joinable())
+        return;
+
+    std::shared_ptr<Http::Client> poll;
+    std::shared_ptr<Http::Client> send;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_stop = true;
+        poll = m_activePoll;
+        send = m_activeSend;
+    }
+    m_wake.notify_all();
+    // Unblock requests in flight (a long poll can otherwise hold the
+    // thread for tens of seconds).
+    if (poll)
+        poll->Abort();
+    if (send)
+        send->Abort();
+
+    if (m_pollThread.joinable())
+        m_pollThread.join();
+    if (m_sendThread.joinable())
+        m_sendThread.join();
+
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_healthy = false;
+    m_activePoll.reset();
+    m_activeSend.reset();
     m_enabled = false;
-    m_client.reset();
-    m_session.reset();
-    m_wasConnected = false;
 }
 
 bool Gateway::IsConnected() const
 {
-    if (!m_client || m_client->State() != Ws::ClientState::Connected)
-        return false;
-    if (m_mode == GatewayMode::Pusher)
-        return m_session && m_session->IsSubscribed();
-    return true;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_enabled && m_healthy;
 }
+
+void Gateway::MarkHealthy()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_healthy = true;
+}
+
+void Gateway::MarkUnhealthy(const std::string& error)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_healthy = false;
+    m_lastError = error;
+}
+
+bool Gateway::SleepFor(int seconds)
+{
+    std::unique_lock<std::mutex> lock(m_mutex);
+    m_wake.wait_for(lock, std::chrono::seconds(seconds),
+                    [this] { return m_stop; });
+    return !m_stop;
+}
+
+// ---------------------------------------------------------------------
+// poll worker: GET {base}/poll?timeout=N  ->  inbound commands
+// ---------------------------------------------------------------------
+
+void Gateway::PollLoop()
+{
+    int backoff = kInitialBackoffSeconds;
+    const std::string path =
+        "/poll?timeout=" + std::to_string(kPollHoldSeconds);
+
+    for (;;)
+    {
+        std::shared_ptr<Http::Client> client(MakeClient().release());
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (m_stop)
+                return;
+            m_activePoll = client;
+        }
+
+        const Http::Response r =
+            client->Get(m_url, path, m_token, kPollTimeoutMs);
+
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_activePoll.reset();
+            if (m_stop)
+                return;
+        }
+
+        if (!r.ok)
+        {
+            MarkUnhealthy("poll: " + r.error);
+            if (!SleepFor(backoff))
+                return;
+            backoff = backoff * 2 > kMaxBackoffSeconds ? kMaxBackoffSeconds
+                                                       : backoff * 2;
+            continue;
+        }
+
+        if (IsAuthStatus(r.status))
+        {
+            MarkUnhealthy("poll: HTTP " + std::to_string(r.status) +
+                          " - check the auth token");
+            if (!SleepFor(kMaxBackoffSeconds))
+                return;
+            continue;
+        }
+
+        if (r.status == 204)
+        {
+            // Hold expired with nothing to deliver - poll again.
+            MarkHealthy();
+            backoff = kInitialBackoffSeconds;
+            continue;
+        }
+
+        if (r.status != 200)
+        {
+            MarkUnhealthy("poll: HTTP " + std::to_string(r.status));
+            if (!SleepFor(backoff))
+                return;
+            backoff = backoff * 2 > kMaxBackoffSeconds ? kMaxBackoffSeconds
+                                                       : backoff * 2;
+            continue;
+        }
+
+        // 200: {"commands":[ ... ]} (bare arrays are accepted too)
+        backoff = kInitialBackoffSeconds;
+        const json body = json::parse(r.body, nullptr, false);
+        const json* commands = nullptr;
+        if (body.is_array())
+            commands = &body;
+        else if (body.is_object() && body.contains("commands") &&
+                 body.at("commands").is_array())
+            commands = &body.at("commands");
+
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_healthy = true;
+            if (commands)
+            {
+                for (const json& c : *commands)
+                {
+                    if (!c.is_object())
+                        continue;
+                    m_inbound.push_back(c.dump());
+                    ++m_received;
+                }
+            }
+            else if (!r.body.empty())
+            {
+                m_lastError = "poll: response body is not a command list";
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// send worker: outbound queue -> POST {base}/messages
+// ---------------------------------------------------------------------
+
+void Gateway::SendLoop()
+{
+    int backoff = kInitialBackoffSeconds;
+
+    for (;;)
+    {
+        // Wait until there is something to send (or we are stopping).
+        std::vector<std::string> batch;
+        {
+            std::unique_lock<std::mutex> lock(m_mutex);
+            m_wake.wait_for(lock, std::chrono::milliseconds(250), [this] {
+                return m_stop || !m_outbound.empty();
+            });
+            if (m_stop)
+                return;
+            size_t bytes = 0;
+            while (!m_outbound.empty() && batch.size() < kMaxBatchMessages &&
+                   bytes < kMaxBatchBytes)
+            {
+                bytes += m_outbound.front().size();
+                batch.push_back(std::move(m_outbound.front()));
+                m_outbound.pop_front();
+            }
+        }
+        if (batch.empty())
+            continue;
+
+        json payload = json::object();
+        json arr = json::array();
+        for (const std::string& message : batch)
+        {
+            json m = json::parse(message, nullptr, false);
+            if (!m.is_discarded())
+                arr.push_back(std::move(m));
+        }
+        payload["messages"] = std::move(arr);
+        const std::string body = payload.dump();
+
+        std::shared_ptr<Http::Client> client(MakeClient().release());
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (m_stop)
+                return;
+            m_activeSend = client;
+        }
+
+        const Http::Response r =
+            client->Post(m_url, "/messages", body, m_token, kPostTimeoutMs);
+
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_activeSend.reset();
+            if (m_stop)
+                return;
+        }
+
+        if (r.ok && r.status >= 200 && r.status < 300)
+        {
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_healthy = true;
+                m_sent += static_cast<unsigned long>(batch.size());
+            }
+            backoff = kInitialBackoffSeconds;
+            continue;
+        }
+
+        // Failure: the batch is dropped (events heal via the snapshot the
+        // plugin sends when we become healthy again).
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_dropped += static_cast<unsigned long>(batch.size());
+        }
+        if (!r.ok)
+            MarkUnhealthy("send: " + r.error);
+        else
+            MarkUnhealthy("send: HTTP " + std::to_string(r.status) +
+                          (IsAuthStatus(r.status) ? " - check the auth token" : ""));
+
+        const int wait = IsAuthStatus(r.status) ? kMaxBackoffSeconds : backoff;
+        if (!SleepFor(wait))
+            return;
+        backoff = backoff * 2 > kMaxBackoffSeconds ? kMaxBackoffSeconds
+                                                   : backoff * 2;
+    }
+}
+
+// ---------------------------------------------------------------------
+// main-thread API
+// ---------------------------------------------------------------------
 
 std::vector<std::string> Gateway::Tick(bool& justConnected)
 {
     justConnected = false;
+    std::vector<std::string> commands;
 
-    if (!m_enabled)
+    bool healthy = false;
     {
-        m_client.reset();
-        m_session.reset();
-        m_wasConnected = false;
-        return {};
+        std::lock_guard<std::mutex> lock(m_mutex);
+        healthy = m_enabled && m_healthy;
+        commands.assign(m_inbound.begin(), m_inbound.end());
+        m_inbound.clear();
     }
 
-    if (m_client)
+    if (healthy && !m_connectAnnounced)
     {
-        switch (m_client->State())
-        {
-            case Ws::ClientState::Connected:
-            {
-                std::vector<std::string> commands;
-                const bool fatal =
-                    ProcessInbound(m_client->TakeReceived(), commands,
-                                   true /*connection alive*/);
-                if (fatal)
-                {
-                    // Bad key/app/quota: retrying the same config fast is
-                    // pointless - back off to the maximum.
-                    ScheduleRetry(kMaxRetrySeconds);
-                    m_retryDelay = kMaxRetrySeconds;
-                    m_received += static_cast<unsigned long>(commands.size());
-                    return commands;
-                }
-
-                if (IsConnected() && !m_wasConnected)
-                {
-                    m_wasConnected = true;
-                    m_retryDelay = kInitialRetrySeconds;
-                    justConnected = true;
-                }
-                m_received += static_cast<unsigned long>(commands.size());
-                return commands;
-            }
-            case Ws::ClientState::Connecting:
-                return {};
-            case Ws::ClientState::Closed:
-            {
-                // Drain what arrived before the close FIRST - the peer's
-                // final messages often explain the close (e.g. a fatal
-                // pusher:error just before the server drops us).
-                m_lastError = m_client->LastError();
-                std::vector<std::string> commands;
-                const bool fatal =
-                    ProcessInbound(m_client->TakeReceived(), commands,
-                                   false /*connection gone*/);
-                m_received += static_cast<unsigned long>(commands.size());
-
-                ScheduleRetry(fatal ? kMaxRetrySeconds : m_retryDelay);
-                m_retryDelay = fatal ? kMaxRetrySeconds
-                               : m_retryDelay * 2 > kMaxRetrySeconds
-                                   ? kMaxRetrySeconds
-                                   : m_retryDelay * 2;
-                return commands;
-            }
-        }
+        m_connectAnnounced = true;
+        justConnected = true;
     }
-
-    // No client: wait out the backoff, then start a new attempt.
-    if (m_retryCountdown > 0)
+    else if (!healthy)
     {
-        --m_retryCountdown;
-        return {};
+        m_connectAnnounced = false;
     }
-
-    if (m_mode == GatewayMode::Pusher)
-    {
-        m_session.reset(new Pusher::PusherSession(m_pusherConfig));
-        Ws::Url url = m_url;
-        url.path = m_session->ConnectionPath();
-        m_client.reset(new Ws::WsClient(url));
-    }
-    else
-    {
-        m_client.reset(new Ws::WsClient(m_url));
-    }
-    return {};
+    return commands;
 }
 
 void Gateway::Send(const std::string& message)
 {
     if (!m_enabled)
         return;  // silently ignore when the gateway is off
-    if (!IsConnected())
     {
-        ++m_dropped;
-        return;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (!m_healthy || m_outbound.size() >= kMaxQueued)
+        {
+            ++m_dropped;
+            return;
+        }
+        m_outbound.push_back(message);
     }
-    const std::string wire = m_mode == GatewayMode::Pusher
-                                 ? m_session->WrapOutgoing(message)
-                                 : message;
-    if (!m_client->Send(wire))
-    {
-        ++m_dropped;
-        return;
-    }
-    ++m_sent;
+    m_wake.notify_all();
 }
 
 Gateway::Status Gateway::GetStatus() const
 {
     Status s;
+    std::lock_guard<std::mutex> lock(m_mutex);
     s.enabled = m_enabled;
-    s.mode = m_mode == GatewayMode::Pusher ? "pusher" : "raw";
     s.url = m_urlString.empty() ? "(not set)" : m_urlString;
-    s.channel = m_mode == GatewayMode::Pusher ? m_pusherConfig.channel : "";
     s.lastError = m_lastError;
     s.sent = m_sent;
     s.received = m_received;
     s.dropped = m_dropped;
-
     if (!m_enabled)
         s.state = "disabled";
-    else if (IsConnected())
+    else if (m_healthy)
         s.state = "connected";
-    else if (m_client && m_client->State() == Ws::ClientState::Connected)
-        s.state = "subscribing";  // pusher handshake in progress
-    else if (m_client)
-        s.state = "connecting";
     else
-        s.state = "waiting to reconnect (" + std::to_string(m_retryCountdown) + "s)";
+        s.state = s.lastError.empty() ? "connecting" : "retrying";
     return s;
 }

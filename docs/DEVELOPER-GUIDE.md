@@ -8,7 +8,7 @@ and where everything comes from.
 ## Architecture
 
 ```
-EuroScope (32-bit MFC app, UI thread)                      ┊ socket thread
+EuroScope (32-bit MFC app, UI thread)                      ┊ worker threads
  │  loads DLL, calls EuroScopePlugInInit()   dllmain.cpp   ┊
  ▼                                                         ┊
 ConnectorPlugin : CPlugIn          ConnectorPlugin.{h,cpp} ┊
@@ -29,38 +29,39 @@ Actions                                  Actions.{h,cpp}   ┊
 EuroScope plugin API                                       ┊
                                                            ┊
 Gateway                                  Gateway.{h,cpp}   ┊
- │  reconnect/backoff, counters, snapshot trigger          ┊
- │  mode raw: contract straight through                    ┊
- │  mode pusher: frames run through                        ┊
- │    Pusher::PusherSession    pusher/PusherSession.{h,cpp}┊
- │      protocol-7 state machine: /app/{key} path,         ┊
- │      subscribe + HMAC auth token (pusher/Crypto),       ┊
- │      client-event wrap/unwrap, pusher:ping/error        ┊
- └─► Ws::WsClient                    ws/WsClient.{h,cpp} ══╪══ thread-safe
-      connect/handshake/frame pump on its own thread       ┊   queues
-      built on the pure codec:                             ┊
-      ws/WsFrame.{h,cpp} + ws/WsHandshake.{h,cpp}          ┊
+ │  poll thread + send thread, backoff, counters,          ┊
+ │  snapshot trigger; batches messages into POSTs and ═════╪══ thread-safe
+ │  long-polls for commands (docs/PROTOCOL.md Transport)   ┊   queues
+ └─► Http::Client (interface)        http/HttpClient.h     ┊
+      production: WinHTTP        http/WinHttpClient.cpp    ┊
+        (OS handles TLS, certificates, proxies)            ┊
+      tests: plain-HTTP POSIX client (tests/)              ┊
+      URL parsing (pure):            http/HttpUrl.{h,cpp}  ┊
 
 ChatInjection                            ChatInjection.{h,cpp}
     isolated workaround for the missing chat API — see below
 ```
 
 **The separation matters:** `ConnectorPlugin` is the *command-line* front
-end; `JsonApi` is the *contract* front end; the `Gateway`/`WsClient` pair
-is pure transport and never interprets messages. All semantics live in
+end; `JsonApi` is the *contract* front end; `Gateway` is pure transport
+and never interprets messages beyond batching/unbatching them. All semantics live in
 `Actions` (behind `IActions`), so behaviour is identical no matter where a
 request comes from. Keep new functionality in `Actions` (or a sibling),
 never inline in command handlers, and keep `docs/PROTOCOL.md` in sync with
 `JsonApi.cpp`.
 
-**Threading, as implemented:** the socket thread (inside `WsClient`) only
-touches sockets and its own mutex-guarded queues. Everything EuroScope
-lives on the main thread: events are serialised inside the callbacks and
-handed to `Gateway::Send`; inbound commands are drained once per second in
-`OnTimer` and executed there. Never call the EuroScope API (or `Actions`,
-or `JsonApi::HandleMessage`) from any other thread. `WsClient` is one
-connection attempt; `Gateway` recreates it for reconnects (2 s → 60 s
-backoff) and triggers the `session_snapshot` on each connect.
+**Threading, as implemented:** `Gateway` owns two worker threads — one
+keeps a long poll open (`GET {base}/poll`), one drains the outbound queue
+into batched `POST {base}/messages` requests. Workers only touch HTTP and
+the mutex-guarded queues. Everything EuroScope lives on the main thread:
+events are serialised inside the callbacks and handed to `Gateway::Send`;
+inbound commands are drained once per second in `OnTimer` and executed
+there. Never call the EuroScope API (or `Actions`, or
+`JsonApi::HandleMessage`) from any other thread. Failures back off
+exponentially (2 s → 60 s; 401/403 park at the maximum); every
+unhealthy → healthy transition re-triggers the `session_snapshot`.
+`Disable()` aborts an in-flight long poll via `Http::Client::Abort()` and
+joins the workers — that is why one client instance exists per request.
 
 ### Adding a new operation (checklist)
 
@@ -84,10 +85,10 @@ override in `ConnectorPlugin`, a row in PROTOCOL.md's event table.
 
 1. **Single thread.** Every `CPlugIn` callback runs on EuroScope's UI
    thread, and the API is not thread-safe. Never block (no network calls,
-   no sleeps). When the WebSocket layer lands, it must run its socket on a
-   background thread, exchange plain data (JSON/structs) with the main
-   thread via a locked queue, and apply inbound requests on the main thread
-   — `OnTimer` (called once per second) is the natural drain point.
+   no sleeps). All network I/O runs on the Gateway's worker threads,
+   which exchange plain data (JSON strings) with the main thread via
+   locked queues; inbound commands are applied on the main thread from
+   `OnTimer` (called once per second).
 
 2. **Copy strings immediately.** API getters return `const char*` into
    internal buffers that the next API call may overwrite, and they can be
@@ -158,26 +159,13 @@ ctest --test-dir build-tests --output-on-failure
 - `tests/json_api_test.cpp` — the contract: envelope validation, action
   dispatch, payload validation, error model, event builders (mock
   `IActions`).
-- `tests/ws_test.cpp` — the WebSocket codec against the RFC 6455 vectors:
-  handshake key/accept, URL parsing, frame encode/decode, fragmentation,
-  the message assembler.
-- `tests/pusher_test.cpp` — the Pusher layer: SHA-256/HMAC-SHA256 against
-  the FIPS 180-4 / RFC 4231 vectors, the auth token against the example
-  in Pusher's own documentation, and the full `PusherSession` state
-  machine (subscribe flow, ping/pong, fatal vs. transient errors,
-  client-event wrap/unwrap).
-- `tests/ws_client_test.cpp` (UNIX only) — the REAL `WsClient` code,
-  end-to-end over TCP against an in-process scripted server: handshake,
-  echo, server push, fragmented messages, ping/pong, close and error
-  paths. (`WsClient.cpp` has a small POSIX `#ifdef` branch exactly so this
-  test can exist; the production DLL uses the Win32 branch.)
-- `tests/pusher_e2e_test.cpp` (UNIX only) — the real
-  `Gateway`+`PusherSession`+`WsClient` stack against a scripted
-  Pusher-protocol server: verified auth token on subscribe, connected-only
-  -after-subscribe gating, client-event exchange in both directions, and
-  the fatal `pusher:error` → max-backoff path. This test caught three
-  real bugs during development (handshake-coalescing deadlock, final
-  messages lost on close, unbounded handshake wait) — keep it green.
+- `tests/http_gateway_test.cpp` (UNIX only) — URL parsing plus the REAL
+  `Gateway` (both worker threads) end-to-end over live TCP against a
+  scripted HTTP backend: bearer-token auth, long-poll command delivery,
+  204 empty polls, batched POSTs, snapshot gating and counters, 401 →
+  clear error and no health, backend-down error path, and `Disable()`
+  promptly aborting a held long poll. Production swaps in WinHTTP behind
+  the same `Http::Client` interface.
 
 **Add a test whenever you add or change an action, event, or codec
 behaviour.** The tests are deliberately a standalone CMake project because
@@ -199,22 +187,22 @@ test procedure:
    *plugin* reports success; delivery failure shows in EuroScope's own
    chat, which is expected and documented behaviour).
 
-## Phase 2 status & what's next
+## Transport status & what's next
 
-The WebSocket transport is implemented as described above (own RFC 6455
-client — zero dependencies, x86-safe, codec fully unit-tested; see
-research doc §4 for why not IXWebSocket/Boost). Candidate next steps:
+The transport is plain HTTPS (long poll + POST, see PROTOCOL.md). An
+earlier hand-rolled WebSocket/Pusher transport was replaced by this
+design — it lives in git history at commit `ed8ef6c` if ever needed.
+Candidate next steps:
 
-- **`wss://` (TLS)** — required before any gateway leaves the LAN, and
-  for hosted pusher.com. Options: Windows Schannel wrapped around the
-  socket, or vendoring mbedTLS. Isolate it inside `WsClient` so nothing
-  else changes.
-- **Raw-mode authentication** — pusher mode has private-channel token
-  auth; raw mode still has none. A gateway token could ride as a header
-  in `Ws::BuildRequest` or as a first `command`.
+- **Windows CI** — a GitHub Actions workflow (windows runner, `cmake -A
+  Win32`) would compile `WinHttpClient.cpp` against the real Windows
+  headers and build the DLL artifact; a Linux job runs the test suites.
 - **Controller events** — `controller_updated`/`controller_removed` are
   reserved in the spec; wire `OnControllerPositionUpdate`/`Disconnect`
   through the same EmitEvent path.
-- **Outbound queueing policy** — currently events during a disconnect are
-  dropped (snapshot restores consistency). If a gateway needs gapless
-  history, add sequence numbers to events first.
+- **Outbound queueing policy** — messages produced while unhealthy are
+  dropped (the snapshot restores consistency). If the backend needs
+  gapless history, add sequence numbers to events first.
+- **Poll efficiency** — if command latency matters more than request
+  volume, shorten the poll `timeout`; if volume matters, lengthen it
+  (the server hold hint is `Gateway::kPollHoldSeconds`).

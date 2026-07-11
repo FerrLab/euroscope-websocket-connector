@@ -226,8 +226,6 @@ ConnectorPlugin::ConnectorPlugin()
 
 void ConnectorPlugin::LoadSettings()
 {
-    m_gateway.SetClientVersion(PLUGIN_VERSION);
-
     const char* url = GetDataFromSettings("GatewayUrl");
     if (url && *url)
     {
@@ -236,19 +234,9 @@ void ConnectorPlugin::LoadSettings()
             Say(std::string("Saved gateway URL is invalid: ") + error);
     }
 
-    const char* mode = GetDataFromSettings("GatewayMode");
-    if (mode && std::string(mode) == "pusher")
-        m_gateway.SetMode(GatewayMode::Pusher);
-
-    const char* key = GetDataFromSettings("GatewayKey");
-    if (key && *key)
-        m_gateway.SetPusherKey(key);
-    const char* secret = GetDataFromSettings("GatewaySecret");
-    if (secret && *secret)
-        m_gateway.SetPusherSecret(secret);
-    const char* channel = GetDataFromSettings("GatewayChannel");
-    if (channel && *channel)
-        m_gateway.SetPusherChannel(channel);
+    const char* token = GetDataFromSettings("GatewayToken");
+    if (token && *token)
+        m_gateway.SetToken(token);
 
     const char* positions = GetDataFromSettings("GatewayPositions");
     if (positions && *positions)
@@ -345,8 +333,7 @@ void ConnectorPlugin::CmdHelp()
     Say(".wsc freq <text>              - text to primary frequency (experimental, UI injection)");
     Say(".wsc json <message>           - run a JSON contract command (docs/PROTOCOL.md)");
     Say(".wsc events <on|off|pos on|pos off|status> - print the JSON event stream");
-    Say(".wsc gateway url <ws://host:port/> | connect | disconnect | status");
-    Say(".wsc gateway mode <raw|pusher> | key/secret/channel <v> - Pusher (Reverb/Soketi) setup");
+    Say(".wsc gateway url <https://host/base> | token <t> | connect | disconnect | status");
     Say(".wsc gateway auto <on|off> | pos <on|off>  - autoconnect / send positions");
 }
 
@@ -628,21 +615,9 @@ void ConnectorPlugin::OnTimer(int /*Counter*/)
     if (justConnected)
     {
         Say("Gateway connected: " + m_gateway.GetUrl());
-        // Snapshot first, so the peer has the full state before any
-        // incremental events or command responses arrive. Pusher servers
-        // cap message sizes (~10 KB), so there the snapshot is streamed as
-        // session_reset + one flight_updated per flight instead of one
-        // potentially huge session_snapshot.
-        if (m_gateway.Mode() == GatewayMode::Pusher)
-        {
-            m_gateway.Send(m_jsonApi.EventSessionReset());
-            for (const FlightInfo& flight : m_actions.CollectFlights(""))
-                m_gateway.Send(m_jsonApi.EventFlightUpdated(flight));
-        }
-        else
-        {
-            m_gateway.Send(m_jsonApi.EventSessionSnapshot(m_actions.CollectFlights("")));
-        }
+        // Snapshot first, so the backend has the full state before any
+        // incremental events or command responses arrive.
+        m_gateway.Send(m_jsonApi.EventSessionSnapshot(m_actions.CollectFlights("")));
     }
     else if (wasConnected && !m_gateway.IsConnected() && m_gateway.IsEnabled())
     {
@@ -663,7 +638,7 @@ void ConnectorPlugin::CmdGateway(const std::vector<std::string>& tokens)
     {
         if (b.empty())
         {
-            Say("Usage: .wsc gateway url ws://host:port/path");
+            Say("Usage: .wsc gateway url https://host[:port]/base-path");
             return;
         }
         const std::string error = m_gateway.SetUrl(b);
@@ -672,58 +647,21 @@ void ConnectorPlugin::CmdGateway(const std::vector<std::string>& tokens)
             Say("Invalid gateway URL: " + error);
             return;
         }
-        SaveSetting("GatewayUrl", "WebSocket gateway URL", b);
+        SaveSetting("GatewayUrl", "Backend base URL (https)", b);
         Say("Gateway URL set to " + b +
             (m_gateway.IsEnabled() ? " (reconnecting)" : " - '.wsc gateway connect' to connect"));
     }
-    else if (a == "mode")
-    {
-        if (b != "raw" && b != "pusher")
-        {
-            Say("Usage: .wsc gateway mode <raw|pusher>");
-            return;
-        }
-        m_gateway.SetMode(b == "pusher" ? GatewayMode::Pusher : GatewayMode::Raw);
-        SaveSetting("GatewayMode", "Gateway wire protocol (raw|pusher)", b);
-        Say("Gateway mode: " + b +
-            (b == "pusher" ? " - set '.wsc gateway key/secret/channel' as needed" : ""));
-    }
-    else if (a == "key")
+    else if (a == "token")
     {
         if (b.empty())
         {
-            Say("Usage: .wsc gateway key <pusher-app-key>");
+            Say("Usage: .wsc gateway token <bearer-token>");
             return;
         }
-        m_gateway.SetPusherKey(b);
-        SaveSetting("GatewayKey", "Pusher app key", b);
-        Say("Pusher app key set.");
-    }
-    else if (a == "secret")
-    {
-        if (b.empty())
-        {
-            Say("Usage: .wsc gateway secret <pusher-app-secret>");
-            return;
-        }
-        m_gateway.SetPusherSecret(b);
-        SaveSetting("GatewaySecret", "Pusher app secret (auth token signing)", b);
-        Say("Pusher app secret set (stored in the EuroScope settings file - "
-            "use a dedicated app for this connector).");
-    }
-    else if (a == "channel")
-    {
-        if (b.empty())
-        {
-            Say("Usage: .wsc gateway channel <name>   (e.g. private-euroscope)");
-            return;
-        }
-        m_gateway.SetPusherChannel(b);
-        SaveSetting("GatewayChannel", "Pusher channel name", b);
-        Say("Pusher channel set to " + b +
-            (b.rfind("private-", 0) == 0 || b.rfind("presence-", 0) == 0
-                 ? " (token auth via app secret)"
-                 : " (public - no auth)"));
+        m_gateway.SetToken(b);
+        SaveSetting("GatewayToken", "Backend bearer token", b);
+        Say("Gateway token set (stored in the EuroScope settings file - "
+            "use a token you can revoke).");
     }
     else if (a == "connect")
     {
@@ -763,14 +701,8 @@ void ConnectorPlugin::CmdGateway(const std::vector<std::string>& tokens)
     else if (a == "status")
     {
         const Gateway::Status s = m_gateway.GetStatus();
-        Say("Gateway: " + s.state + "   Mode: " + s.mode + "   URL: " + s.url);
-        if (s.mode == "pusher")
-        {
-            const Pusher::Config& p = m_gateway.PusherConf();
-            Say("Channel: " + s.channel + "   Key: " +
-                (p.appKey.empty() ? "(not set)" : p.appKey) + "   Secret: " +
-                (p.secret.empty() ? "(not set)" : "(set)"));
-        }
+        Say("Gateway: " + s.state + "   URL: " + s.url + "   Token: " +
+            (m_gateway.HasToken() ? "(set)" : "(not set)"));
         Say("Sent: " + std::to_string(s.sent) +
             "   Received: " + std::to_string(s.received) +
             "   Dropped (while offline): " + std::to_string(s.dropped) +
@@ -780,6 +712,6 @@ void ConnectorPlugin::CmdGateway(const std::vector<std::string>& tokens)
     }
     else
     {
-        Say("Usage: .wsc gateway <url|mode|key|secret|channel|connect|disconnect|auto|pos|status>");
+        Say("Usage: .wsc gateway <url|token|connect|disconnect|auto on|off|pos on|off|status>");
     }
 }

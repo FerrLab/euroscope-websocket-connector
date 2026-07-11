@@ -1,39 +1,42 @@
 #pragma once
 
-// Gateway — the connection manager between the plugin and the WebSocket
-// gateway. Owns the WsClient (one instance per connection attempt) and
-// drives reconnection with exponential backoff.
+// Gateway — the HTTPS transport between the plugin and the backend.
 //
-// Two wire modes:
-//   * Raw    — contract messages go directly over the socket (our own
-//              gateway implementations).
-//   * Pusher — the connection speaks the Pusher Channels protocol
-//              (Laravel Reverb, Soketi, ...): connect to /app/{key},
-//              subscribe to a channel with a locally-minted auth token,
-//              and ride contract messages as "client-euroscope" events.
-//              See src/pusher/PusherSession.h and docs/PROTOCOL.md.
+// Wire model (docs/PROTOCOL.md "Transport"):
+//   * plugin -> backend : POST {base}/messages  {"messages":[ ... ]}
+//                         batched contract messages (events, responses)
+//   * backend -> plugin : GET  {base}/poll?timeout=25   (long poll)
+//                         200 {"commands":[ ... ]} or 204 when the hold
+//                         expires with nothing to deliver
+//   * both requests carry "Authorization: Bearer <token>"
 //
-// All methods are called from the EuroScope MAIN thread only (commands and
-// OnTimer). The socket thread lives inside WsClient and communicates
-// through its thread-safe queues; nothing here needs a lock.
+// The backend is a plain HTTPS app (e.g. Laravel): it stores/forwards the
+// plugin's messages (typically re-broadcasting them via Soketi/Reverb to
+// browsers) and queues commands for the plugin per token.
 //
-// Data flow per OnTimer tick (1 Hz):
-//   plugin -> Tick() -> { justConnected?, inbound command strings }
-//   plugin runs commands through JsonApi and calls Send() for responses;
-//   event callbacks call Send() as events happen.
+// Threading: two worker threads (poll + send) own all HTTP I/O; the
+// EuroScope main thread only touches the mutex-guarded queues via the
+// public API (SetUrl/Enable/Tick/Send/... are main-thread only). On
+// Windows the HTTP work is done by WinHTTP - TLS and certificate
+// validation are the OS's job.
+//
+// Failure model: on any failure the affected thread backs off
+// exponentially (2s -> 60s); auth failures (401/403) park at the maximum
+// straight away. Messages produced while unhealthy are dropped and
+// counted - consumers are made consistent again by the session snapshot
+// the plugin sends on every unhealthy->healthy transition.
 
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <deque>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
-#include "pusher/PusherSession.h"
-#include "ws/WsClient.h"
-
-enum class GatewayMode
-{
-    Raw,
-    Pusher,
-};
+#include "http/HttpClient.h"
 
 class Gateway
 {
@@ -41,88 +44,97 @@ public:
     struct Status
     {
         bool enabled = false;
-        std::string mode;       // "raw" | "pusher"
         std::string url;
-        std::string channel;    // pusher mode only
-        std::string state;      // "disabled", "connecting", "subscribing",
-                                // "connected", "waiting to reconnect (Ns)"
-        std::string lastError;  // most recent connection failure, if any
-        unsigned long sent = 0;
-        unsigned long received = 0;
-        unsigned long dropped = 0;  // messages dropped while not connected
+        std::string state;      // "disabled", "connecting", "connected",
+                                // "retrying"
+        std::string lastError;  // most recent failure, if any
+        unsigned long sent = 0;      // messages POSTed successfully
+        unsigned long received = 0;  // commands received via poll
+        unsigned long dropped = 0;   // messages dropped while unhealthy
     };
 
-    // Validates and stores the gateway URL. Returns an error string, or
-    // empty on success. Changing any connection setting while connected
-    // drops the connection (reconnects on the next tick if enabled).
+    // `factory` creates one Http::Client per request; the default uses
+    // WinHTTP on Windows. Tests inject a plain-HTTP client here.
+    explicit Gateway(Http::ClientFactory factory = nullptr);
+    ~Gateway();
+
+    Gateway(const Gateway&) = delete;
+    Gateway& operator=(const Gateway&) = delete;
+
+    // Validates and stores the backend base URL
+    // (https://host[:port]/base). Returns an error string, or empty on
+    // success. Reconnects if currently enabled.
     std::string SetUrl(const std::string& url);
     std::string GetUrl() const { return m_urlString; }
     bool HasValidUrl() const { return m_url.ok; }
 
-    void SetMode(GatewayMode mode);
-    GatewayMode Mode() const { return m_mode; }
+    // Bearer token sent on every request. Reconnects if enabled.
+    void SetToken(const std::string& token);
+    bool HasToken() const { return !m_token.empty(); }
 
-    // Pusher-mode settings (persisted by the plugin).
-    void SetPusherKey(const std::string& key);
-    void SetPusherSecret(const std::string& secret);
-    void SetPusherChannel(const std::string& channel);
-    void SetClientVersion(const std::string& version);
-    const Pusher::Config& PusherConf() const { return m_pusherConfig; }
-
-    // Enable = connect now and keep reconnecting; Disable = drop and stay
-    // offline. Enable validates the configuration for the current mode.
+    // Enable = start the workers and keep retrying; Disable = stop
+    // everything (blocks briefly to join the threads).
     std::string Enable();
     void Disable();
     bool IsEnabled() const { return m_enabled; }
 
-    // Raw mode: transport up. Pusher mode: transport up AND subscribed.
+    // Healthy = the last poll or POST round-trip succeeded.
     bool IsConnected() const;
 
-    // Call once per second (from OnTimer). Returns all contract messages
-    // received from the gateway since the last tick; sets `justConnected`
-    // on the tick the connection became usable (the caller sends the
-    // snapshot).
+    // Call once per second (from OnTimer). Returns commands received from
+    // the backend; sets `justConnected` on the tick the transport became
+    // healthy (the caller sends the session snapshot).
     std::vector<std::string> Tick(bool& justConnected);
 
-    // Queues a contract message when connected (wrapping it as a Pusher
-    // client event in pusher mode); silently drops (and counts) it
-    // otherwise - consumers recover state from the snapshot on reconnect.
+    // Queues a contract message for the next POST batch when healthy;
+    // silently drops (and counts) it otherwise.
     void Send(const std::string& message);
 
     Status GetStatus() const;
 
+    // Tunables (exposed for tests/documentation).
+    static constexpr int kPollHoldSeconds = 25;   // server-side hold hint
+    static constexpr int kPollTimeoutMs = 40000;  // client cap > hold time
+    static constexpr int kPostTimeoutMs = 30000;
+    static constexpr int kInitialBackoffSeconds = 2;
+    static constexpr int kMaxBackoffSeconds = 60;
+    static constexpr size_t kMaxQueued = 5000;    // outbound queue cap
+    static constexpr size_t kMaxBatchMessages = 200;
+    static constexpr size_t kMaxBatchBytes = 512 * 1024;
+
 private:
-    static const int kInitialRetrySeconds = 2;
-    static const int kMaxRetrySeconds = 60;
+    void PollLoop();
+    void SendLoop();
+    void MarkHealthy();
+    void MarkUnhealthy(const std::string& error);
+    // Interruptible sleep; returns false when stopping.
+    bool SleepFor(int seconds);
+    std::unique_ptr<Http::Client> MakeClient();
 
-    Ws::Url m_url;
+    // --- configuration (main thread; only changed while workers are
+    // stopped) ---------------------------------------------------------
+    Http::ClientFactory m_factory;
+    Http::Url m_url;
     std::string m_urlString;
-    GatewayMode m_mode = GatewayMode::Raw;
-    Pusher::Config m_pusherConfig;
-
+    std::string m_token;
     bool m_enabled = false;
-    bool m_wasConnected = false;
+    bool m_connectAnnounced = false;  // main-thread: justConnected edge
 
-    int m_retryDelay = kInitialRetrySeconds;
-    int m_retryCountdown = 0;
-
+    // --- shared with the worker threads --------------------------------
+    mutable std::mutex m_mutex;
+    std::condition_variable m_wake;
+    bool m_stop = false;
+    bool m_healthy = false;
     std::string m_lastError;
+    std::deque<std::string> m_outbound;
+    std::deque<std::string> m_inbound;
     unsigned long m_sent = 0;
     unsigned long m_received = 0;
     unsigned long m_dropped = 0;
+    // in-flight clients, so Disable() can abort blocked requests
+    std::shared_ptr<Http::Client> m_activePoll;
+    std::shared_ptr<Http::Client> m_activeSend;
 
-    std::unique_ptr<Ws::WsClient> m_client;
-    std::unique_ptr<Pusher::PusherSession> m_session;  // pusher mode only
-
-    // Drops the connection and restarts the (re)connect cycle on the next
-    // tick; used when settings change.
-    void ResetConnection();
-    void ScheduleRetry(int seconds);
-
-    // Runs received frames through the Pusher session (or passes them
-    // through in raw mode), appending contract messages to `commands`.
-    // Returns true when a fatal Pusher error was seen.
-    bool ProcessInbound(std::vector<std::string> raw,
-                        std::vector<std::string>& commands,
-                        bool connectionAlive);
+    std::thread m_pollThread;
+    std::thread m_sendThread;
 };
