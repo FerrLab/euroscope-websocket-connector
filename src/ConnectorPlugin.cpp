@@ -492,8 +492,9 @@ void ConnectorPlugin::CmdMsg(const std::vector<std::string>& tokens, const std::
     const std::string text = RemainderAfterTokens(line, 3);
     // ".msg <callsign> <text>" is EuroScope's own private-message command;
     // we type it into the command line on the controller's behalf.
-    const auto r = ChatInjection::SendCommandLine(".msg " + tokens[2] + " " + text);
-    Say(r.ok ? "Private message to " + tokens[2] + " handed to EuroScope."
+    const auto r = ChatInjection::SendCommandLine(
+        ".msg " + tokens[2] + " " + text, "Private message to " + tokens[2]);
+    Say(r.ok ? "Private message to " + tokens[2] + ": " + r.detail
              : "Private message FAILED: " + r.detail);
 }
 
@@ -505,8 +506,8 @@ void ConnectorPlugin::CmdFreq(const std::vector<std::string>& tokens, const std:
         return;
     }
     const std::string text = RemainderAfterTokens(line, 2);
-    const auto r = ChatInjection::SendToPrimaryFrequency(text);
-    Say(r.ok ? "Text handed to EuroScope for the primary frequency."
+    const auto r = ChatInjection::SendToPrimaryFrequency(text, "Frequency text");
+    Say(r.ok ? "Frequency text: " + r.detail
              : "Frequency text FAILED: " + r.detail);
 }
 
@@ -629,6 +630,13 @@ void ConnectorPlugin::OnTimer(int /*Counter*/)
 
     for (const std::string& message : inbound)
         m_gateway.Send(m_jsonApi.HandleMessage(message));
+
+    // Pump the chat-injection queue AFTER the inbound commands so a send
+    // queued by a gateway command dispatches this same tick; outcomes of
+    // sends dispatched on earlier ticks are reported here (deferred
+    // verification - see ChatInjection.h).
+    for (const ChatInjection::Outcome& outcome : ChatInjection::Pump())
+        Say(outcome.detail);
 }
 
 void ConnectorPlugin::CmdGateway(const std::vector<std::string>& tokens)

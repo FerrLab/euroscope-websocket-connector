@@ -38,6 +38,17 @@ target_include_directories(gateway_config_test PRIVATE
 
 add_test(NAME gateway_config COMMAND gateway_config_test)
 
+add_executable(injection_verdict_test
+    injection_verdict_test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/InjectionVerdict.cpp
+)
+target_compile_features(injection_verdict_test PRIVATE cxx_std_17)
+target_include_directories(injection_verdict_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+
+add_test(NAME injection_verdict COMMAND injection_verdict_test)
+
 # End-to-end transport test: the production Gateway (poll/send threads,
 # backoff, auth) over live TCP against a scripted HTTP backend. UNIX-only
 # (the test HTTP client/server use POSIX sockets); on Windows the same

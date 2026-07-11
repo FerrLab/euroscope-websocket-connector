@@ -23,13 +23,15 @@ namespace MockChatInjection
 
 namespace ChatInjection
 {
-    SendResult SendCommandLine(const std::string& text)
+    SendResult SendCommandLine(const std::string& text,
+                               const std::string& /*label*/)
     {
         MockChatInjection::lastCommandLine = text;
         return { MockChatInjection::nextOk, MockChatInjection::nextDetail };
     }
 
-    SendResult SendToPrimaryFrequency(const std::string& text)
+    SendResult SendToPrimaryFrequency(const std::string& text,
+                                      const std::string& /*label*/)
     {
         MockChatInjection::lastFrequencyText = text;
         return { MockChatInjection::nextOk, MockChatInjection::nextDetail };

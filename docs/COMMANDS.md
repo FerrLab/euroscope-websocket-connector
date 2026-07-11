@@ -103,8 +103,12 @@ command line and presses the **FREQ key** for you. Consequences:
   aircraft's callsign** — that is EuroScope's own behaviour for the FREQ key.
 - It always goes to the *primary* frequency; there is no way to target
   another frequency.
-- If EuroScope doesn't consume the text, the plugin restores whatever you
-  had typed in the command line and reports failure.
+- The send happens in the background: the text is injected on the next
+  1 Hz timer tick (never during command processing — EuroScope would wipe
+  it) and verified on the tick after that. Expect the verdict in the WSC
+  tab within **about two seconds**. On failure, whatever you had typed in
+  the command line is restored.
+- Sends are serialized — a burst of N messages takes about 2·N seconds.
 
 ## 4. Private message to a user — *experimental*
 

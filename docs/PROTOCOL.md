@@ -89,8 +89,11 @@ aircraft) come back as `ok:false` with the reason in `error`.
 | `send_private_message` | `message` (string) — recipient is `callsign` | **Experimental** (command-line injection; see [COMMANDS.md](COMMANDS.md) §4) |
 | `send_frequency_message` | `message` (string) — no `callsign` needed | **Experimental**; primary frequency only (see [COMMANDS.md](COMMANDS.md) §3) |
 
-`ok:true` on the two `send_*` actions means the message was handed to
-EuroScope's command line, not that it was delivered on the network.
+`ok:true` on the two `send_*` actions means the message was queued into
+EuroScope's input path, not that it was delivered on the network. The
+injection and its consumed-by-EuroScope check happen on the plugin's
+next two timer ticks (~2 s total); the verdict is reported only in the
+local WSC chat tab (the contract has no follow-up message for it).
 
 ## Events (plugin → backend/frontend)
 
