@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <iomanip>
 #include <sstream>
 
 #include "ChatInjection.h"
@@ -111,6 +112,42 @@ namespace
 
 namespace
 {
+    const char* FacilityLabel(int facility)
+    {
+        static const char* kLabels[] = { "?", "FSS", "DEL", "GND",
+                                         "TWR", "APP", "CTR" };
+        return (facility >= 1 && facility <= 6) ? kLabels[facility] : "?";
+    }
+
+    const char* RatingLabel(int rating)
+    {
+        static const char* kLabels[] = { "?",  "OBS", "S1", "S2", "S3",
+                                         "C1", "C2",  "C3", "I1", "I2",
+                                         "I3", "SUP", "ADM" };
+        return (rating >= 1 && rating <= 12) ? kLabels[rating] : "?";
+    }
+
+    // One compact summary line per controller, e.g.:
+    // EDDM_TWR  119.600  TWR  C1  [MT]  Jane Doe
+    std::string FormatControllerLine(const ControllerInfo& c)
+    {
+        std::ostringstream line;
+        line << c.callsign << "  ";
+        if (c.frequency > 0.0)
+            line << std::fixed << std::setprecision(3) << c.frequency;
+        else
+            line << "-";
+        line << "  " << FacilityLabel(c.facility)
+             << "  " << RatingLabel(c.rating);
+        if (!c.positionId.empty())
+            line << "  [" << c.positionId << "]";
+        if (!c.fullName.empty())
+            line << "  " << c.fullName;
+        if (!c.isController)
+            line << "  (observer)";
+        return line.str();
+    }
+
     // One compact summary line per flight, e.g.:
     // DLH4TX  A320  EDDM>EDDF  RFL240  CFL120  SQ1000  TAXI  GS18  [me]
     std::string FormatSummaryLine(const FlightInfo& f)
@@ -198,8 +235,10 @@ namespace
         out << "Tracked by: "
             << (f.trackingController.empty()
                     ? "-"
-                    : (f.trackedByMe ? f.trackingController + " (me)" : f.trackingController))
-            << "   Comm: " << f.communicationType << "\n";
+                    : (f.trackedByMe ? f.trackingController + " (me)" : f.trackingController));
+        if (!f.handoffTargetController.empty())
+            out << "   Handoff -> " << f.handoffTargetController;
+        out << "   Comm: " << f.communicationType << "\n";
 
         out << "Scratch pad: " << (f.scratchPad.empty() ? "-" : f.scratchPad) << "\n";
         out << "Route: " << f.route << "\n";
@@ -290,8 +329,12 @@ bool ConnectorPlugin::OnCompileCommand(const char* sCommandLine)
         CmdHelp();
     else if (sub == "list")
         CmdList(tokens);
+    else if (sub == "atc")
+        CmdAtc(tokens);
     else if (sub == "show")
         CmdShow(tokens);
+    else if (sub == "assume" || sub == "release" || sub == "transfer")
+        CmdTrack(tokens, sub);
     else if (sub == "set")
         CmdSet(tokens);
     else if (sub == "pad")
@@ -322,7 +365,9 @@ void ConnectorPlugin::CmdHelp()
 {
     Say(std::string(PLUGIN_NAME) + " v" PLUGIN_VERSION " - commands (full docs: docs/COMMANDS.md):");
     Say(".lpc list [filter]            - list flight plans (filter: callsign prefix or ICAO of dep/arr)");
+    Say(".lpc atc [filter]             - list online controllers (filter: callsign prefix)");
     Say(".lpc show <callsign>          - full detail of one flight (incl. SID/STAR, scratch pad)");
+    Say(".lpc assume <cs> | release <cs> | transfer <cs> <controller> - track control / handoffs");
     Say(".lpc set <cs> calt <FL240|24000|ils|visual|clear> - cleared altitude");
     Say(".lpc set <cs> rfl <FL340|34000>  - final altitude   | hdg <deg|0> - heading");
     Say(".lpc set <cs> spd <kts|0> | mach <0.78|0> | rate <fpm|0> - speeds/rate");
@@ -359,6 +404,49 @@ void ConnectorPlugin::CmdList(const std::vector<std::string>& tokens)
     if (flights.size() > kMaxLines)
         Say("(+" + std::to_string(flights.size() - kMaxLines) +
             " more - narrow it down with '.lpc list <filter>')");
+}
+
+void ConnectorPlugin::CmdAtc(const std::vector<std::string>& tokens)
+{
+    const std::string filter = tokens.size() > 2 ? tokens[2] : "";
+    const size_t kMaxLines = 25;
+
+    const std::vector<ControllerInfo> controllers =
+        m_actions.CollectControllers(filter);
+
+    if (controllers.empty())
+    {
+        Say(filter.empty() ? "No controllers online in this session."
+                           : "No controllers matching '" + filter + "'.");
+        return;
+    }
+    Say("--- " + std::to_string(controllers.size()) + " controller(s)" +
+        (filter.empty() ? "" : " matching '" + filter + "'") + " ---");
+    for (size_t i = 0; i < controllers.size() && i < kMaxLines; ++i)
+        Say(FormatControllerLine(controllers[i]));
+    if (controllers.size() > kMaxLines)
+        Say("(+" + std::to_string(controllers.size() - kMaxLines) +
+            " more - narrow it down with '.lpc atc <filter>')");
+}
+
+void ConnectorPlugin::CmdTrack(const std::vector<std::string>& tokens,
+                               const std::string& verb)
+{
+    const bool isTransfer = verb == "transfer";
+    if (tokens.size() < (isTransfer ? 4u : 3u))
+    {
+        Say(isTransfer ? "Usage: .lpc transfer <callsign> <controller callsign or position ID>"
+                       : "Usage: .lpc " + verb + " <callsign>");
+        return;
+    }
+    ActionResult r;
+    if (verb == "assume")
+        r = m_actions.AssumeTrack(tokens[2]);
+    else if (verb == "release")
+        r = m_actions.ReleaseTrack(tokens[2]);
+    else
+        r = m_actions.TransferTrack(tokens[2], tokens[3]);
+    Say(r.message);
 }
 
 void ConnectorPlugin::CmdShow(const std::vector<std::string>& tokens)
@@ -604,6 +692,22 @@ void ConnectorPlugin::OnRadarTargetPositionUpdate(EuroScopePlugIn::CRadarTarget 
     EmitEvent(m_jsonApi.EventPositionUpdated(pos), true);
 }
 
+void ConnectorPlugin::OnControllerPositionUpdate(EuroScopePlugIn::CController Controller)
+{
+    if ((!m_flightEvents && !m_gateway.IsConnected()) || !Controller.IsValid())
+        return;
+    EmitEvent(m_jsonApi.EventControllerUpdated(Actions::SnapshotController(Controller)),
+              false);
+}
+
+void ConnectorPlugin::OnControllerDisconnect(EuroScopePlugIn::CController Controller)
+{
+    if ((!m_flightEvents && !m_gateway.IsConnected()) || !Controller.IsValid())
+        return;
+    const char* callsign = Controller.GetCallsign();
+    EmitEvent(m_jsonApi.EventControllerRemoved(callsign ? callsign : ""), false);
+}
+
 // ---------------------------------------------------------------------
 // gateway pump (1 Hz) and command
 // ---------------------------------------------------------------------
@@ -620,7 +724,8 @@ void ConnectorPlugin::OnTimer(int /*Counter*/)
         Say("Gateway connected: " + m_gateway.GetUrl());
         // Snapshot first, so the backend has the full state before any
         // incremental events or command responses arrive.
-        m_gateway.Send(m_jsonApi.EventSessionSnapshot(m_actions.CollectFlights("")));
+        m_gateway.Send(m_jsonApi.EventSessionSnapshot(m_actions.CollectFlights(""),
+                                                      m_actions.CollectControllers("")));
     }
     else if (wasConnected && !m_gateway.IsConnected() && m_gateway.IsEnabled())
     {

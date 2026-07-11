@@ -108,6 +108,7 @@ FlightInfo Actions::Snapshot(CFlightPlan fp)
 
     info.trackingController = S(fp.GetTrackingControllerCallsign());
     info.trackedByMe = fp.GetTrackingControllerIsMe();
+    info.handoffTargetController = S(fp.GetHandoffTargetControllerCallsign());
     info.communicationType = fpd.GetCommunicationType();
 
     CRadarTarget rt = fp.GetCorrelatedRadarTarget();
@@ -398,4 +399,127 @@ ActionResult Actions::SetStar(const std::string& callsign, const std::string& st
                                   ": route changed locally but AmendFlightPlan failed (not connected?)");
 
     return ActionResult::Ok(Upper(callsign) + ": STAR " + star + " - new route: " + newRoute);
+}
+
+// ---------------------------------------------------------------------
+// capability 7: track control (assume / release / transfer)
+// ---------------------------------------------------------------------
+// "Assume" and "release" double as the handoff accept/refuse when a
+// handoff is currently being offered to me - mirroring what the ASSUME
+// button does in EuroScope's tag.
+
+namespace
+{
+    bool HandoffOfferedToMe(EuroScopePlugIn::CPlugIn* es,
+                            EuroScopePlugIn::CFlightPlan fp)
+    {
+        const std::string myself = S(es->ControllerMyself().GetCallsign());
+        return !myself.empty() &&
+               S(fp.GetHandoffTargetControllerCallsign()) == myself;
+    }
+}
+
+ActionResult Actions::AssumeTrack(const std::string& callsign)
+{
+    std::string error;
+    CFlightPlan fp = Find(callsign, error);
+    if (!fp.IsValid())
+        return ActionResult::Fail(error);
+    const std::string cs = Upper(callsign);
+
+    if (HandoffOfferedToMe(m_es, fp))
+    {
+        fp.AcceptHandoff();
+        return ActionResult::Ok(cs + ": handoff accepted");
+    }
+    if (fp.GetTrackingControllerIsMe())
+        return ActionResult::Ok(cs + ": already tracked by you");
+    if (!fp.StartTracking())
+        return ActionResult::Fail(
+            cs + ": EuroScope refused to assume (not connected, or the "
+                 "flight is tracked by another controller)");
+    return ActionResult::Ok(cs + ": track assumed");
+}
+
+ActionResult Actions::ReleaseTrack(const std::string& callsign)
+{
+    std::string error;
+    CFlightPlan fp = Find(callsign, error);
+    if (!fp.IsValid())
+        return ActionResult::Fail(error);
+    const std::string cs = Upper(callsign);
+
+    if (HandoffOfferedToMe(m_es, fp))
+    {
+        fp.RefuseHandoff();
+        return ActionResult::Ok(cs + ": handoff refused");
+    }
+    if (!fp.GetTrackingControllerIsMe())
+        return ActionResult::Fail(cs + ": you are not tracking this flight");
+    if (!fp.EndTracking())
+        return ActionResult::Fail(
+            cs + ": EuroScope refused to release the track (not connected?)");
+    return ActionResult::Ok(cs + ": track released");
+}
+
+ActionResult Actions::TransferTrack(const std::string& callsign,
+                                    const std::string& controller)
+{
+    std::string error;
+    CFlightPlan fp = Find(callsign, error);
+    if (!fp.IsValid())
+        return ActionResult::Fail(error);
+    const std::string cs = Upper(callsign);
+    const std::string target = Upper(controller);
+
+    EuroScopePlugIn::CController ctrl = m_es->ControllerSelect(target.c_str());
+    if (!ctrl.IsValid())
+        ctrl = m_es->ControllerSelectByPositionId(target.c_str());
+    if (!ctrl.IsValid())
+        return ActionResult::Fail(
+            cs + ": no controller '" + target +
+            "' online (use the callsign or the position ID - see '.lpc atc')");
+    if (!ctrl.IsController())
+        return ActionResult::Fail(cs + ": '" + S(ctrl.GetCallsign()) +
+                                  "' is an observer and cannot receive a handoff");
+    if (!fp.GetTrackingControllerIsMe())
+        return ActionResult::Fail(
+            cs + ": you can only transfer a flight you are tracking - assume it first");
+    if (!fp.InitiateHandoff(S(ctrl.GetCallsign()).c_str()))
+        return ActionResult::Fail(cs + ": EuroScope refused to initiate the handoff");
+    return ActionResult::Ok(cs + ": handoff initiated to " + S(ctrl.GetCallsign()));
+}
+
+// ---------------------------------------------------------------------
+// capability 8: ATC list
+// ---------------------------------------------------------------------
+
+ControllerInfo Actions::SnapshotController(EuroScopePlugIn::CController c)
+{
+    ControllerInfo info;
+    info.callsign = S(c.GetCallsign());
+    info.positionId = S(c.GetPositionId());
+    info.fullName = S(c.GetFullName());
+    // The API reports 199.980 when no primary frequency is selected.
+    const double frequency = c.GetPrimaryFrequency();
+    info.frequency = frequency >= 199.0 ? 0.0 : frequency;
+    info.facility = c.GetFacility();
+    info.rating = c.GetRating();
+    info.isController = c.IsController();
+    return info;
+}
+
+std::vector<ControllerInfo> Actions::CollectControllers(const std::string& filter) const
+{
+    const std::string f = Upper(filter);
+    std::vector<ControllerInfo> out;
+
+    for (EuroScopePlugIn::CController c = m_es->ControllerSelectFirst();
+         c.IsValid(); c = m_es->ControllerSelectNext(c))
+    {
+        if (!f.empty() && !StartsWith(Upper(S(c.GetCallsign())), f))
+            continue;
+        out.push_back(SnapshotController(c));
+    }
+    return out;
 }

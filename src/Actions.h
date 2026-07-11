@@ -46,6 +46,15 @@ public:
     bool GetFlight(const std::string& callsign, FlightInfo& out,
                    std::string& error) const override;
 
+    // --- capability 8: ATC list ----------------------------------------
+
+    // Snapshot of every online controller/observer in the session.
+    std::vector<ControllerInfo> CollectControllers(const std::string& filter) const override;
+
+    // Used by ConnectorPlugin to build controller_updated events from
+    // the OnControllerPositionUpdate callback's CController.
+    static ControllerInfo SnapshotController(EuroScopePlugIn::CController c);
+
     // --- capability 2: modify flight plan parameters ------------------
 
     ActionResult SetClearedAltitude(const std::string& callsign, int feet) override;
@@ -78,6 +87,17 @@ public:
     // FlightInfo.
     ActionResult SetSid(const std::string& callsign, const std::string& sid) override;
     ActionResult SetStar(const std::string& callsign, const std::string& star) override;
+
+    // --- capability 7: track control -----------------------------------
+
+    // Assume/release map onto the handoff when one is being offered to me
+    // (AcceptHandoff/RefuseHandoff), and onto StartTracking/EndTracking
+    // otherwise. Transfer validates the target is an online controller
+    // (callsign or position ID) before InitiateHandoff.
+    ActionResult AssumeTrack(const std::string& callsign) override;
+    ActionResult ReleaseTrack(const std::string& callsign) override;
+    ActionResult TransferTrack(const std::string& callsign,
+                               const std::string& controller) override;
 
     // Tokens accepted by BroadcastScratchPadToken.
     static bool IsKnownScratchPadToken(const std::string& token);

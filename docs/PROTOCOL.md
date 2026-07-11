@@ -59,6 +59,7 @@ plugin ──event────▶ backend/frontend      (unsolicited, when enabl
 |--------|---------|------------------|
 | `ping` | — | `{ "plugin": "...", "protocolVersion": 1 }` |
 | `list_flights` | `filter` (string, optional): callsign prefix or exact origin/destination ICAO | `{ "count": N, "flights": [ FlightObject, ... ] }` |
+| `list_controllers` | `filter` (string, optional): callsign prefix | `{ "count": N, "controllers": [ ControllerObject, ... ] }` |
 
 ### Flight-scoped read
 
@@ -86,6 +87,9 @@ aircraft) come back as `ok:false` with the reason in `error`.
 | `set_ground_state` | `state` (string): `NSTS` `STUP` `PUSH` `TAXI` `DEPA` `TXIN` `PARK` `CLEA` `NOTC` `ARR` | Magic-token broadcast; previous scratch pad content is preserved. `CLEA`/`NOTC` drive the clearance-received flag |
 | `set_sid` | `sid` (string, optional `/RWY` suffix) | Route rewrite + amend; name must exist in the sector file |
 | `set_star` | `star` (string) | Route rewrite + amend |
+| `assume` | — | Start tracking the flight; when a handoff is being offered **to you**, accepts it instead (like EuroScope's ASSUME) |
+| `release` | — | Stop tracking the flight; when a handoff is being offered **to you**, refuses it instead |
+| `transfer` | `controller` (string): target callsign or sector-file position ID | Initiate a handoff of a flight **you track**; fails if the target is offline or an observer |
 | `send_private_message` | `message` (string) — recipient is `callsign` | **Experimental** (command-line injection; see [COMMANDS.md](COMMANDS.md) §4) |
 | `send_frequency_message` | `message` (string) — no `callsign` needed | **Experimental**; primary frequency only (see [COMMANDS.md](COMMANDS.md) §3) |
 
@@ -102,10 +106,11 @@ local LPC chat tab (the contract has no follow-up message for it).
 | `flight_updated` | A flight plan appears or changes — filed data **or** controller-assigned data (consumers get the full fresh object either way) | subject | FlightObject |
 | `flight_removed` | The flight plan leaves the session (pilot disconnect / out of range) | subject | `{}` |
 | `position_updated` | A radar target gets a new position (every few seconds per target; also for targets without a flight plan) | subject | `{ "latitude": 48.35, "longitude": 11.78, "flightLevel": 12000, "groundSpeed": 250, "squawk": "1000" }` |
-| `session_snapshot` | Right after the gateway transport becomes healthy (startup and every recovery) — rebuild your world from it before consuming incremental events | — | `{ "count": N, "flights": [ FlightObject, ... ] }` |
+| `controller_updated` | An ATC position appears or changes (frequency, identification, …) | subject | ControllerObject |
+| `controller_removed` | An ATC position disconnects | subject | `{}` |
+| `session_snapshot` | Right after the gateway transport becomes healthy (startup and every recovery) — rebuild your world from it before consuming incremental events | — | `{ "count": N, "flights": [ FlightObject, ... ], "controllerCount": M, "controllers": [ ControllerObject, ... ] }` |
 
-Reserved (not emitted yet): `controller_updated`, `controller_removed`,
-`metar`.
+Reserved (not emitted yet): `metar`.
 
 The event stream can be inspected without a gateway: `.lpc events on`
 (flight events) and `.lpc events pos on` (position events — noisy) print
@@ -227,6 +232,7 @@ empty when absent.
   "clearanceFlag": true,
   "trackingController": "EDDM_TWR",
   "trackedByMe": true,
+  "handoffTargetController": "",
   "communicationType": "v",
   "correlated": true,
   "transponderSquawk": "1000",
@@ -245,6 +251,8 @@ Field notes:
 - `groundState`: as EuroScope reports it (`ST-UP`, `PUSH`, `TAXI`, `DEPA`,
   … or empty). Note the *read* form `ST-UP` differs from the *write* token
   `STUP` — that asymmetry is EuroScope's, not ours.
+- `handoffTargetController`: callsign of the controller a handoff is
+  currently being offered to; empty when no handoff is in progress.
 - `communicationType`: `v` voice, `r` receive-only, `t` text (as filed /
   assigned).
 - `transponderSquawk`, `flightLevel` (feet), `groundSpeed` (knots),
@@ -252,6 +260,37 @@ Field notes:
   (the plan is matched to a radar target).
 - `list_flights` returns flights known to *this controller's session*
   (EuroScope's visibility range) — not the whole network.
+
+## ControllerObject
+
+Returned by `list_controllers`, carried by `controller_updated` and in
+the `controllers` array of `session_snapshot`.
+
+```json
+{
+  "callsign": "EDDM_TWR",
+  "positionId": "MT",
+  "fullName": "Jane Doe",
+  "frequency": 119.6,
+  "facility": 4,
+  "rating": 5,
+  "isController": true
+}
+```
+
+Field notes:
+
+- `frequency`: primary frequency in MHz; `0` when the position has no
+  primary frequency selected.
+- `facility`: EuroScope's numeric code — 1 FSS, 2 DEL, 3 GND, 4 TWR,
+  5 APP/DEP, 6 CTR.
+- `rating`: the network rating number (1 OBS, 2 S1, 3 S2, 4 S3, 5 C1,
+  6 C2, 7 C3, 8 I1, 9 I2, 10 I3, 11 SUP, 12 ADM).
+- `isController`: `true` when the server accepts the position as a
+  controller (may track and modify flights); `false` for observers —
+  those cannot receive a `transfer`.
+- Scope matches `list_flights`: controllers visible to *this session*,
+  not the whole network.
 
 ## Worked examples
 

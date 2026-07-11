@@ -43,6 +43,21 @@ and the tracking controller in brackets (`[me]` when it's you).
 facility; "all flights" means all flights *available to your session*, not
 the whole network.
 
+### `.lpc atc [filter]`
+
+Lists every controller (and observer) online in this session, one line
+each:
+
+```
+EDDM_TWR  119.600  TWR  C1  [MT]  Jane Doe
+```
+
+Fields: callsign, primary frequency (`-` when none), facility
+(FSS/DEL/GND/TWR/APP/CTR), rating (OBS, S1–S3, C1–C3, I1–I3, SUP, ADM),
+sector-file position ID in brackets, full name, and `(observer)` when the
+server does not accept the position as a controller. `filter` keeps
+callsigns starting with it. Output is capped at 25 lines.
+
 ### `.lpc show <callsign>`
 
 Multi-line detail for one flight: plan type, aircraft type + WTC, routing
@@ -319,3 +334,37 @@ dropped counters and the last error.
 .lpc gateway connect
 .lpc gateway status
 ```
+
+---
+
+## 9. Track control (assume / release / transfer)
+
+### `.lpc assume <callsign>`
+
+Assumes the flight — starts tracking it. When another controller is
+currently **offering you a handoff** of that flight, this accepts the
+handoff instead (exactly what EuroScope's ASSUME does).
+
+### `.lpc release <callsign>`
+
+Releases the track of a flight **you are tracking**. When a handoff is
+being offered **to you**, this refuses it instead.
+
+### `.lpc transfer <callsign> <controller>`
+
+Initiates a handoff of a flight **you are tracking** to another online
+controller. `<controller>` is the target's callsign (`EDDF_APP`) or
+sector-file position ID (`MT`) — look both up with `.lpc atc`. The
+transfer completes when the receiving controller accepts; until then the
+flight's `handoffTargetController` field (visible in `.lpc show` as
+`Handoff -> ...`) names the pending target.
+
+```
+.lpc assume DLH4TX
+.lpc transfer DLH4TX EDDF_APP
+.lpc release BAW23K
+```
+
+**Permissions:** all three are network operations — you must be
+connected; `assume` fails when another controller already tracks the
+flight; `transfer` fails when the target is offline or an observer.

@@ -54,6 +54,8 @@ public:
                                                   int DataType) override;
     void OnFlightPlanDisconnect(EuroScopePlugIn::CFlightPlan FlightPlan) override;
     void OnRadarTargetPositionUpdate(EuroScopePlugIn::CRadarTarget RadarTarget) override;
+    void OnControllerPositionUpdate(EuroScopePlugIn::CController Controller) override;
+    void OnControllerDisconnect(EuroScopePlugIn::CController Controller) override;
 
     // 1 Hz heartbeat: pumps the gateway (reconnects, inbound commands,
     // snapshot on connect). This is the ONLY place gateway traffic touches
@@ -93,7 +95,9 @@ private:
     // need the raw remainder (message text, scratchpad content).
     void CmdHelp();
     void CmdList(const std::vector<std::string>& tokens);
+    void CmdAtc(const std::vector<std::string>& tokens);
     void CmdShow(const std::vector<std::string>& tokens);
+    void CmdTrack(const std::vector<std::string>& tokens, const std::string& verb);
     void CmdSet(const std::vector<std::string>& tokens);
     void CmdPad(const std::vector<std::string>& tokens, const std::string& line);
     void CmdState(const std::vector<std::string>& tokens);

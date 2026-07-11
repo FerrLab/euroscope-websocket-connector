@@ -55,6 +55,9 @@ struct FlightInfo
 
     std::string trackingController;  // callsign, empty if untracked
     bool trackedByMe = false;
+    // Callsign of the controller a handoff is being offered to; empty when
+    // no handoff is in progress.
+    std::string handoffTargetController;
     char communicationType = ' ';  // 'v', 'r', 't' (or unassigned)
 
     // Radar-derived; valid only when correlated == true.
@@ -64,6 +67,22 @@ struct FlightInfo
     int groundSpeed = 0;  // knots
     double latitude = 0.0;
     double longitude = 0.0;
+};
+
+// Snapshot of one online ATC position (or observer), decoupled from
+// EuroScope handle objects. Facility and rating are EuroScope's numeric
+// codes (documented in docs/PROTOCOL.md); labels are presentation.
+struct ControllerInfo
+{
+    std::string callsign;    // e.g. "EDDM_TWR"
+    std::string positionId;  // sector-file position ID, e.g. "MT"
+    std::string fullName;
+    double frequency = 0.0;  // primary frequency in MHz; 0 when none
+    int facility = 0;        // 1 FSS, 2 DEL, 3 GND, 4 TWR, 5 APP/DEP, 6 CTR
+    int rating = 0;          // 1 OBS ... 12 ADM (VATSIM rating number)
+    // Accepted as a controller by the server (may track and modify
+    // flights); false for observers.
+    bool isController = false;
 };
 
 // Lightweight radar position sample, used for position_updated events —

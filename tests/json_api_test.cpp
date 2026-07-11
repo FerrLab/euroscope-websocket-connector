@@ -120,6 +120,26 @@ public:
         return true;
     }
 
+    static ControllerInfo SampleController(const std::string& callsign)
+    {
+        ControllerInfo c;
+        c.callsign = callsign;
+        c.positionId = "MT";
+        c.fullName = "Jane Doe";
+        c.frequency = 119.6;
+        c.facility = 4;  // TWR
+        c.rating = 5;    // C1
+        c.isController = true;
+        return c;
+    }
+
+    std::vector<ControllerInfo> CollectControllers(const std::string& filter) const override
+    {
+        lastMethod = "CollectControllers";
+        lastString = filter;
+        return { SampleController("EDDM_TWR"), SampleController("EDDF_APP") };
+    }
+
 private:
     ActionResult Record(const std::string& method, const std::string& callsign)
     {
@@ -194,6 +214,20 @@ public:
     {
         lastString = star;
         return Record("SetStar", cs);
+    }
+    ActionResult AssumeTrack(const std::string& cs) override
+    {
+        return Record("AssumeTrack", cs);
+    }
+    ActionResult ReleaseTrack(const std::string& cs) override
+    {
+        return Record("ReleaseTrack", cs);
+    }
+    ActionResult TransferTrack(const std::string& cs,
+                               const std::string& controller) override
+    {
+        lastString = controller;
+        return Record("TransferTrack", cs);
     }
 };
 
@@ -403,6 +437,55 @@ int main()
         CHECK(r3.at("error").get<std::string>().find("command line not found") != std::string::npos);
     }
 
+    // --- ATC list --------------------------------------------------------
+
+    {
+        json r = Run(api, R"({"type":"command","action":"list_controllers"})");
+        CHECK(r.at("ok").get<bool>());
+        CHECK_EQ(r.at("payload").at("count").get<int>(), 2);
+        CHECK_EQ(r.at("payload").at("controllers")[0].at("callsign").get<std::string>(), "EDDM_TWR");
+        CHECK_EQ(r.at("payload").at("controllers")[0].at("frequency").get<double>(), 119.6);
+        CHECK_EQ(r.at("payload").at("controllers")[0].at("facility").get<int>(), 4);
+        CHECK(r.at("payload").at("controllers")[0].at("isController").get<bool>());
+
+        json rf = Run(api, R"({"type":"command","action":"list_controllers","payload":{"filter":"EDDM"}})");
+        CHECK(rf.at("ok").get<bool>());
+        CHECK_EQ(mock.lastString, "EDDM");
+    }
+
+    // --- track control (assume / release / transfer) -----------------------
+
+    {
+        json r = Run(api, R"({"type":"command","id":21,"callsign":"DLH4TX","action":"assume"})");
+        CHECK(r.at("ok").get<bool>());
+        CHECK_EQ(mock.lastMethod, "AssumeTrack");
+        CHECK_EQ(mock.lastCallsign, "DLH4TX");
+        CHECK_EQ(r.at("id").get<int>(), 21);
+
+        json r2 = Run(api, R"({"type":"command","callsign":"DLH4TX","action":"release"})");
+        CHECK(r2.at("ok").get<bool>());
+        CHECK_EQ(mock.lastMethod, "ReleaseTrack");
+
+        json r3 = Run(api, R"({"type":"command","callsign":"DLH4TX","action":"transfer","payload":{"controller":"EDDF_APP"}})");
+        CHECK(r3.at("ok").get<bool>());
+        CHECK_EQ(mock.lastMethod, "TransferTrack");
+        CHECK_EQ(mock.lastString, "EDDF_APP");
+
+        // callsign is mandatory for all three
+        json r4 = Run(api, R"({"type":"command","action":"assume"})");
+        CHECK(!r4.at("ok").get<bool>());
+
+        // transfer requires the target controller in the payload
+        json r5 = Run(api, R"({"type":"command","callsign":"DLH4TX","action":"transfer"})");
+        CHECK(!r5.at("ok").get<bool>());
+        CHECK(r5.at("error").get<std::string>().find("controller") != std::string::npos);
+
+        // EuroScope refusal propagates as ok:false
+        mock.failNext = true;
+        json r6 = Run(api, R"({"type":"command","callsign":"DLH4TX","action":"assume"})");
+        CHECK(!r6.at("ok").get<bool>());
+    }
+
     // --- events ----------------------------------------------------------
 
     {
@@ -428,6 +511,32 @@ int main()
         CHECK_EQ(pe.at("action").get<std::string>(), "position_updated");
         CHECK_EQ(pe.at("payload").at("flightLevel").get<int>(), 12000);
         CHECK_EQ(pe.at("payload").at("squawk").get<std::string>(), "1000");
+
+        json cu = json::parse(api.EventControllerUpdated(MockActions::SampleController("EDDM_TWR")));
+        CHECK_EQ(cu.at("action").get<std::string>(), "controller_updated");
+        CHECK_EQ(cu.at("callsign").get<std::string>(), "EDDM_TWR");
+        CHECK_EQ(cu.at("payload").at("frequency").get<double>(), 119.6);
+        CHECK_EQ(cu.at("payload").at("rating").get<int>(), 5);
+
+        json cr = json::parse(api.EventControllerRemoved("EDDM_TWR"));
+        CHECK_EQ(cr.at("action").get<std::string>(), "controller_removed");
+        CHECK(cr.at("payload").is_object() && cr.at("payload").empty());
+
+        json snap = json::parse(api.EventSessionSnapshot(
+            { MockActions::SampleFlight("DLH4TX") },
+            { MockActions::SampleController("EDDM_TWR"),
+              MockActions::SampleController("EDDF_APP") }));
+        CHECK_EQ(snap.at("action").get<std::string>(), "session_snapshot");
+        CHECK_EQ(snap.at("payload").at("count").get<int>(), 1);
+        CHECK_EQ(snap.at("payload").at("flights")[0].at("callsign").get<std::string>(), "DLH4TX");
+        CHECK_EQ(snap.at("payload").at("controllerCount").get<int>(), 2);
+        CHECK_EQ(snap.at("payload").at("controllers")[1].at("callsign").get<std::string>(), "EDDF_APP");
+
+        // FlightObject carries the pending-handoff target (additive field).
+        FlightInfo handedOff = MockActions::SampleFlight("DLH4TX");
+        handedOff.handoffTargetController = "EDDF_APP";
+        json ho = json::parse(api.EventFlightUpdated(handedOff));
+        CHECK_EQ(ho.at("payload").at("handoffTargetController").get<std::string>(), "EDDF_APP");
     }
 
     // ---------------------------------------------------------------------

@@ -26,6 +26,8 @@ Everything is also driven manually via `.lpc` dot-commands for testing.
 | 4 | Send a private message to a user *(experimental)* | `.lpc msg <cs> <text>` |
 | 5 | Set scratch-pad content, incl. ground states (PUSH/TAXI/…) | `.lpc pad <cs> <text>`, `.lpc state <cs> <token>` |
 | 6 | Read & set SID/STAR | `.lpc show <cs>`, `.lpc sid <cs> <SID[/RWY]>`, `.lpc star <cs> <STAR>` |
+| 7 | Track control: assume, release, transfer (handoffs) | `.lpc assume <cs>`, `.lpc release <cs>`, `.lpc transfer <cs> <controller>` |
+| 8 | List online controllers (ATC positions) | `.lpc atc [filter]` |
 | — | **Standardized JSON contract** — all of the above as bidirectional `{type, callsign, action, payload}` messages | `.lpc json <message>`, `.lpc events on` |
 
 Full command reference with examples and caveats: **[docs/COMMANDS.md](docs/COMMANDS.md)**.

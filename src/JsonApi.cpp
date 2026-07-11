@@ -47,6 +47,7 @@ namespace
             { "clearanceFlag", f.clearanceFlag },
             { "trackingController", f.trackingController },
             { "trackedByMe", f.trackedByMe },
+            { "handoffTargetController", f.handoffTargetController },
             { "communicationType", std::string(1, f.communicationType) },
             { "correlated", f.correlated },
         };
@@ -59,6 +60,21 @@ namespace
             j["longitude"] = f.longitude;
         }
         return j;
+    }
+
+    // ControllerInfo -> JSON. Field names are part of the public contract
+    // (docs/PROTOCOL.md) - do not rename casually.
+    json ToJson(const ControllerInfo& c)
+    {
+        return {
+            { "callsign", c.callsign },
+            { "positionId", c.positionId },
+            { "fullName", c.fullName },
+            { "frequency", c.frequency },
+            { "facility", c.facility },
+            { "rating", c.rating },
+            { "isController", c.isController },
+        };
     }
 
     // Envelope for plugin -> outside messages.
@@ -226,6 +242,20 @@ std::string JsonApi::HandleMessage(const std::string& messageJson)
                 arr.push_back(ToJson(f));
             result["flights"] = std::move(arr);
         }
+        else if (action == "list_controllers")
+        {
+            const std::string filter =
+                payload.contains("filter") && payload.at("filter").is_string()
+                    ? payload.at("filter").get<std::string>()
+                    : "";
+            std::vector<ControllerInfo> controllers =
+                m_actions.CollectControllers(filter);
+            result["count"] = controllers.size();
+            json arr = json::array();
+            for (const ControllerInfo& c : controllers)
+                arr.push_back(ToJson(c));
+            result["controllers"] = std::move(arr);
+        }
         else if (action == "get_flight")
         {
             FlightInfo info;
@@ -264,6 +294,13 @@ std::string JsonApi::HandleMessage(const std::string& messageJson)
                 ar = m_actions.SetSid(RequireCallsign(callsign), RequireString(payload, "sid"));
             else if (action == "set_star")
                 ar = m_actions.SetStar(RequireCallsign(callsign), RequireString(payload, "star"));
+            else if (action == "assume")
+                ar = m_actions.AssumeTrack(RequireCallsign(callsign));
+            else if (action == "release")
+                ar = m_actions.ReleaseTrack(RequireCallsign(callsign));
+            else if (action == "transfer")
+                ar = m_actions.TransferTrack(RequireCallsign(callsign),
+                                             RequireString(payload, "controller"));
             else if (action == "send_private_message")
             {
                 const std::string cs = RequireCallsign(callsign);
@@ -341,15 +378,36 @@ std::string JsonApi::EventPositionUpdated(const PositionUpdate& position) const
     return j.dump();
 }
 
-std::string JsonApi::EventSessionSnapshot(const std::vector<FlightInfo>& flights) const
+std::string JsonApi::EventControllerUpdated(const ControllerInfo& controller) const
+{
+    json j = Envelope("event", "controller_updated", controller.callsign);
+    j["payload"] = ToJson(controller);
+    return j.dump();
+}
+
+std::string JsonApi::EventControllerRemoved(const std::string& callsign) const
+{
+    json j = Envelope("event", "controller_removed", callsign);
+    j["payload"] = json::object();
+    return j.dump();
+}
+
+std::string JsonApi::EventSessionSnapshot(
+    const std::vector<FlightInfo>& flights,
+    const std::vector<ControllerInfo>& controllers) const
 {
     json j = Envelope("event", "session_snapshot", std::string());
-    json arr = json::array();
+    json flightArr = json::array();
     for (const FlightInfo& f : flights)
-        arr.push_back(ToJson(f));
+        flightArr.push_back(ToJson(f));
+    json controllerArr = json::array();
+    for (const ControllerInfo& c : controllers)
+        controllerArr.push_back(ToJson(c));
     j["payload"] = {
         { "count", flights.size() },
-        { "flights", std::move(arr) },
+        { "flights", std::move(flightArr) },
+        { "controllerCount", controllers.size() },
+        { "controllers", std::move(controllerArr) },
     };
     return j.dump();
 }

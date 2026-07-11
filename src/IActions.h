@@ -25,6 +25,9 @@ public:
     virtual std::vector<FlightInfo> CollectFlights(const std::string& filter) const = 0;
     virtual bool GetFlight(const std::string& callsign, FlightInfo& out,
                            std::string& error) const = 0;
+    // Online ATC positions (and observers). `filter` (optional,
+    // case-insensitive) keeps controllers whose callsign starts with it.
+    virtual std::vector<ControllerInfo> CollectControllers(const std::string& filter) const = 0;
 
     // --- writes --------------------------------------------------------
 
@@ -41,4 +44,17 @@ public:
                                                   const std::string& token) = 0;
     virtual ActionResult SetSid(const std::string& callsign, const std::string& sid) = 0;
     virtual ActionResult SetStar(const std::string& callsign, const std::string& star) = 0;
+
+    // --- track control ---------------------------------------------------
+
+    // Assume: accept the handoff when one is being offered to me,
+    // otherwise start tracking the flight.
+    virtual ActionResult AssumeTrack(const std::string& callsign) = 0;
+    // Release: refuse the handoff when one is being offered to me,
+    // otherwise stop tracking the flight.
+    virtual ActionResult ReleaseTrack(const std::string& callsign) = 0;
+    // Transfer: initiate a handoff of a flight I track to another online
+    // controller (callsign or sector-file position ID).
+    virtual ActionResult TransferTrack(const std::string& callsign,
+                                       const std::string& controller) = 0;
 };
