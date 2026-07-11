@@ -26,7 +26,7 @@ jobs:
     name: Test suite (Linux)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Configure
         run: cmake -S tests -B build-tests -DCMAKE_BUILD_TYPE=Release
@@ -41,7 +41,7 @@ jobs:
     name: Plugin DLL (Windows, Win32)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # EuroScope is a 32-bit application; -A Win32 is mandatory
       # (the root CMakeLists refuses to configure for anything else).
@@ -61,7 +61,7 @@ jobs:
         run: ctest --test-dir build-tests -C Release --output-on-failure
 
       - name: Upload DLL artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: WebSocketConnector
           path: build/Release/WebSocketConnector.dll
