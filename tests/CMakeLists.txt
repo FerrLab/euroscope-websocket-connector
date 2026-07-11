@@ -27,6 +27,17 @@ target_include_directories(json_api_test PRIVATE
 
 add_test(NAME json_api COMMAND json_api_test)
 
+add_executable(gateway_config_test
+    gateway_config_test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/GatewayConfig.cpp
+)
+target_compile_features(gateway_config_test PRIVATE cxx_std_17)
+target_include_directories(gateway_config_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+
+add_test(NAME gateway_config COMMAND gateway_config_test)
+
 # End-to-end transport test: the production Gateway (poll/send threads,
 # backoff, auth) over live TCP against a scripted HTTP backend. UNIX-only
 # (the test HTTP client/server use POSIX sockets); on Windows the same

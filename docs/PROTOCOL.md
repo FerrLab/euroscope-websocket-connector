@@ -116,8 +116,11 @@ requests are made with **WinHTTP** — TLS, certificate validation against
 the OS trust store, and proxy settings are handled by the operating
 system. `http://` is accepted for local development.
 
-Configuration (persisted): `.wsc gateway url https://host[:port]/base`,
-`.wsc gateway token <bearer-token>`. Both endpoints receive
+Configuration (persisted): `.wsc gateway config <base64>` where the
+argument is base64 of `<url>:<token>` — one command, because EuroScope's
+command line does not pass `:` characters through to plugins (see
+[COMMANDS.md](COMMANDS.md) §8). A backend onboarding a controller should
+render that base64 string ready to copy. Both endpoints receive
 `Authorization: Bearer <token>`, `Content-Type: application/json`.
 
 ### Sending — `POST {base}/messages`

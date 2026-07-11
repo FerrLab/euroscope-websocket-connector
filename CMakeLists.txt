@@ -31,6 +31,7 @@ add_library(WebSocketConnector SHARED
     src/ChatInjection.cpp
     src/JsonApi.cpp
     src/Gateway.cpp
+    src/GatewayConfig.cpp
     src/http/HttpUrl.cpp
     src/http/WinHttpClient.cpp
 )

@@ -5,6 +5,7 @@
 #include <sstream>
 
 #include "ChatInjection.h"
+#include "GatewayConfig.h"
 
 namespace
 {
@@ -333,7 +334,8 @@ void ConnectorPlugin::CmdHelp()
     Say(".wsc freq <text>              - text to primary frequency (experimental, UI injection)");
     Say(".wsc json <message>           - run a JSON contract command (docs/PROTOCOL.md)");
     Say(".wsc events <on|off|pos on|pos off|status> - print the JSON event stream");
-    Say(".wsc gateway url <https://host/base> | token <t> | connect | disconnect | status");
+    Say(".wsc gateway config <base64 of url:token> - set backend URL + token in one command");
+    Say(".wsc gateway connect | disconnect | status");
     Say(".wsc gateway auto <on|off> | pos <on|off>  - autoconnect / send positions");
 }
 
@@ -634,7 +636,37 @@ void ConnectorPlugin::CmdGateway(const std::vector<std::string>& tokens)
     const std::string a = tokens.size() > 2 ? Lower(tokens[2]) : "status";
     const std::string b = tokens.size() > 3 ? tokens[3] : "";
 
-    if (a == "url")
+    if (a == "config")
+    {
+        // EuroScope's command line does not pass ':' through, so URL and
+        // token arrive together as base64("<url>:<token>").
+        if (b.empty())
+        {
+            Say("Usage: .wsc gateway config <base64 of url:token>");
+            Say("Generate it from 'https://host[:port]/base:<bearer-token>' "
+                "(your backend usually shows it ready to copy).");
+            return;
+        }
+        const GatewayConfig config = ParseGatewayConfig(b);
+        if (!config.error.empty())
+        {
+            Say("Invalid gateway config: " + config.error);
+            return;
+        }
+        const std::string error = m_gateway.SetUrl(config.url);
+        if (!error.empty())
+        {
+            Say("Invalid gateway URL in config: " + error);
+            return;
+        }
+        m_gateway.SetToken(config.token);
+        SaveSetting("GatewayUrl", "Backend base URL (https)", config.url);
+        SaveSetting("GatewayToken", "Backend bearer token", config.token);
+        Say("Gateway configured: " + config.url + ", token set" +
+            (m_gateway.IsEnabled() ? " (reconnecting)"
+                                   : " - '.wsc gateway connect' to connect"));
+    }
+    else if (a == "url")
     {
         if (b.empty())
         {
@@ -712,6 +744,6 @@ void ConnectorPlugin::CmdGateway(const std::vector<std::string>& tokens)
     }
     else
     {
-        Say("Usage: .wsc gateway <url|token|connect|disconnect|auto on|off|pos on|off|status>");
+        Say("Usage: .wsc gateway <config|url|token|connect|disconnect|auto on|off|pos on|off|status>");
     }
 }

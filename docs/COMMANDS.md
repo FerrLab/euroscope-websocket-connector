@@ -246,19 +246,46 @@ All `gateway` settings persist in the EuroScope settings file. The wire
 model — `POST {base}/messages` to send, long-poll `GET {base}/poll` to
 receive — is specified in [PROTOCOL.md](PROTOCOL.md) *Transport*.
 
-### `.wsc gateway url <https://host[:port]/base-path>`
+### `.wsc gateway config <base64>` — the setup command
 
-Sets the backend base URL; the plugin talks to `{base}/messages` and
-`{base}/poll`. `https://` in production (TLS and certificate validation
-are done by Windows/WinHTTP); `http://` is accepted for local
-development. Changing the URL while connected reconnects.
+Sets the backend base URL **and** the bearer token in one command. The
+argument is base64 of
 
-### `.wsc gateway token <bearer-token>`
+```
+<url>:<token>            e.g.  https://api.example.com/euroscope:3|x7Jd...
+```
 
-The token sent as `Authorization: Bearer <token>` on every request — how
-the backend authenticates the plugin and tells sessions apart.
+This is the only way to configure the gateway from the command line:
+**EuroScope's command line does not pass `:` characters through to
+plugins**, so a URL (or a separate url/token pair) cannot be typed
+directly — but base64 never contains `:`.
+
+- The split is at the **last** colon (URLs contain colons; the token must
+  not contain one).
+- Standard and URL-safe base64 alphabets are accepted; padding is
+  optional; a trailing newline inside the payload is trimmed (the classic
+  `echo` without `-n`).
+- Your backend should render this string ready to copy. Generating it by
+  hand:
+  - PowerShell: `[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("https://api.example.com/euroscope:3|x7Jd..."))`
+  - bash: `printf '%s' 'https://api.example.com/euroscope:3|x7Jd...' | base64`
+
+The URL is where the plugin talks to `{base}/messages` and `{base}/poll`.
+`https://` in production (TLS and certificate validation are done by
+Windows/WinHTTP); `http://` is accepted for local development. Changing
+the config while connected reconnects.
+
+The token is sent as `Authorization: Bearer <token>` on every request —
+how the backend authenticates the plugin and tells sessions apart.
 **Stored in plain text in the EuroScope settings file: use a dedicated,
 revocable token** (e.g. a Laravel Sanctum token), not a personal password.
+
+### `.wsc gateway url <url>` / `.wsc gateway token <bearer-token>`
+
+The individual setters still exist, but they are unusable for values
+containing `:` when typed into EuroScope (see above) — which makes `url`
+effectively unusable from the command line. They remain for
+colon-free tokens and for other command sources.
 
 ### `.wsc gateway connect` / `.wsc gateway disconnect`
 
@@ -284,8 +311,7 @@ Shows connection state, URL, whether a token is set, sent/received/
 dropped counters and the last error.
 
 ```
-.wsc gateway url https://api.example.com/euroscope
-.wsc gateway token 3|x7Jd...
+.wsc gateway config aHR0cHM6Ly9hcGkuZXhhbXBsZS5jb20vZXVyb3Njb3BlOjN8eDdKZC4uLg
 .wsc gateway connect
 .wsc gateway status
 ```
