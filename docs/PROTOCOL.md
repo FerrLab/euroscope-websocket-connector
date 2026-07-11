@@ -98,7 +98,8 @@ EuroScope's command line, not that it was delivered on the network.
 | `flight_updated` | A flight plan appears or changes — filed data **or** controller-assigned data (consumers get the full fresh object either way) | subject | FlightObject |
 | `flight_removed` | The flight plan leaves the session (pilot disconnect / out of range) | subject | `{}` |
 | `position_updated` | A radar target gets a new position (every few seconds per target; also for targets without a flight plan) | subject | `{ "latitude": 48.35, "longitude": 11.78, "flightLevel": 12000, "groundSpeed": 250, "squawk": "1000" }` |
-| `session_snapshot` | Right after the plugin (re)connects to the gateway — rebuild your world from it before consuming incremental events | — | `{ "count": N, "flights": [ FlightObject, ... ] }` |
+| `session_snapshot` | Right after the plugin (re)connects in **raw mode** — rebuild your world from it before consuming incremental events | — | `{ "count": N, "flights": [ FlightObject, ... ] }` |
+| `session_reset` | Right after the plugin (re)connects in **Pusher mode**: "clear your world, the full state follows as `flight_updated` events". Used instead of `session_snapshot` because Pusher servers cap message sizes (~10 KB) | — | `{}` |
 
 Reserved (not emitted yet): `controller_updated`, `controller_removed`,
 `metar`.
@@ -109,8 +110,77 @@ each event JSON to the WSC chat tab exactly as it goes over the socket.
 
 ## Transport
 
-The plugin is a **WebSocket client** (RFC 6455) that dials out to a
-gateway, StripCol-style:
+Two wire modes, selected with `.wsc gateway mode <raw|pusher>`.
+
+### Pusher mode (Laravel Reverb, Soketi, Pusher Channels)
+
+The plugin speaks the **Pusher Channels protocol (protocol 7)** as a
+client, so any Pusher-compatible server relays between the plugin and its
+consumers with zero custom gateway code:
+
+- **Connection**: `ws://host:port` from `.wsc gateway url` +
+  `/app/{APP_KEY}?protocol=7&client=euroscope-websocket-connector&version=…`
+  (`.wsc gateway key` sets the app key).
+- **Token authentication**: the plugin subscribes to the configured
+  channel (`.wsc gateway channel`, default **`private-euroscope`**). For
+  `private-*`/`presence-*` channels it presents the standard Pusher auth
+  token, minted locally from the app secret (`.wsc gateway secret`):
+
+  ```
+  auth = "<app_key>:" + hex( HMAC-SHA256( secret, "<socket_id>:<channel>" ) )
+  ```
+
+  This is byte-for-byte what a Pusher auth endpoint would return, so
+  server-side nothing special is needed — Reverb/Soketi validate it out of
+  the box. Public channels (no `private-` prefix) skip the token. The
+  secret is stored in the EuroScope settings file in plain text — use a
+  dedicated app/secret for this connector, not your main application's.
+- **Messages**: every contract message rides as a **client event** named
+  **`client-euroscope`** on the channel, with the contract JSON
+  double-encoded in `data` (the Pusher convention). Both directions use
+  the same event name; the contract's `type` field distinguishes
+  events/responses from commands. The plugin answers `pusher:ping`,
+  handles `pusher:error` (fatal codes 4000–4099 park reconnection at the
+  maximum backoff), and re-subscribes automatically after reconnects.
+- **Snapshot**: on every (re)subscribe the plugin sends `session_reset`
+  followed by one `flight_updated` per flight (not one big
+  `session_snapshot` — Pusher servers cap message size, ~10 KB default).
+- **Server requirements**: client events must be enabled for the app
+  (Reverb: `'enable_client_messages' => true`; Soketi:
+  `enableClientMessages`). Watch event-rate limits — with positions on,
+  busy airspace produces one `client-euroscope` event per aircraft every
+  few seconds (hosted pusher.com's 10 msg/s client-event limit is easily
+  exceeded; self-hosted Reverb/Soketi limits are configurable). And note
+  the transport is still `ws://` — see the TLS caveat below, which rules
+  out hosted pusher.com until `wss://` lands.
+
+A browser consumer needs nothing beyond plain `pusher-js` (channel auth
+handled by your app's usual auth endpoint):
+
+```js
+const channel = pusher.subscribe('private-euroscope');
+
+channel.bind('client-euroscope', (data) => {
+  const msg = typeof data === 'string' ? JSON.parse(data) : data;
+  // msg = { type, callsign, action, payload } per this spec
+});
+
+// send a command to the plugin:
+channel.trigger('client-euroscope', JSON.stringify({
+  type: 'command', id: 1, callsign: 'DLH4TX',
+  action: 'set_ground_state', payload: { state: 'PUSH' },
+}));
+```
+
+(With laravel-echo, `Echo.private('euroscope')` + `channel.listen`/
+`channel.whisper` wrap the same primitives; whispers arrive as
+`client-<name>` events, so `whisper('euroscope', …)` pairs with the
+plugin's `client-euroscope`.)
+
+### Raw mode
+
+The plugin is a plain **WebSocket client** (RFC 6455) that dials out to
+your own gateway, StripCol-style:
 
 - Configure and connect: `.wsc gateway url ws://host:port/path`, then
   `.wsc gateway connect` (see [COMMANDS.md](COMMANDS.md) §8; the URL and

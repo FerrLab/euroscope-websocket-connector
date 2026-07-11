@@ -37,10 +37,25 @@ target_include_directories(ws_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 
 add_test(NAME ws COMMAND ws_test)
 
-# End-to-end WsClient test: the production client code (POSIX branch)
-# against a live in-process server. UNIX-only; on Windows the client is
-# exercised inside EuroScope itself.
+add_executable(pusher_test
+    pusher_test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/pusher/Crypto.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/pusher/PusherSession.cpp
+)
+target_compile_features(pusher_test PRIVATE cxx_std_17)
+target_include_directories(pusher_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+    ${CMAKE_CURRENT_SOURCE_DIR}/../third_party
+)
+
+add_test(NAME pusher COMMAND pusher_test)
+
+# End-to-end tests: the production client code (POSIX branch) against live
+# in-process servers. UNIX-only; on Windows the client is exercised inside
+# EuroScope itself.
 if(UNIX)
+    find_package(Threads REQUIRED)
+
     add_executable(ws_client_test
         ws_client_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ws/WsClient.cpp
@@ -49,7 +64,23 @@ if(UNIX)
     )
     target_compile_features(ws_client_test PRIVATE cxx_std_17)
     target_include_directories(ws_client_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
-    find_package(Threads REQUIRED)
     target_link_libraries(ws_client_test PRIVATE Threads::Threads)
     add_test(NAME ws_client COMMAND ws_client_test)
+
+    add_executable(pusher_e2e_test
+        pusher_e2e_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/Gateway.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/pusher/Crypto.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/pusher/PusherSession.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ws/WsClient.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ws/WsFrame.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ws/WsHandshake.cpp
+    )
+    target_compile_features(pusher_e2e_test PRIVATE cxx_std_17)
+    target_include_directories(pusher_e2e_test PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+        ${CMAKE_CURRENT_SOURCE_DIR}/../third_party
+    )
+    target_link_libraries(pusher_e2e_test PRIVATE Threads::Threads)
+    add_test(NAME pusher_e2e COMMAND pusher_e2e_test)
 endif()

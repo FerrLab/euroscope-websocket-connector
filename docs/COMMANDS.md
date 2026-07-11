@@ -242,17 +242,48 @@ the print toggles and the gateway are independent consumers.
 
 ## 8. Gateway connection
 
+All `gateway` settings persist in the EuroScope settings file.
+
 ### `.wsc gateway url <ws://host:port/path>`
 
-Sets (and persists) the gateway address. `ws://` only — see
-[PROTOCOL.md](PROTOCOL.md) *Transport*. Changing the URL while connected
-reconnects to the new target.
+Sets the gateway address. `ws://` only — see [PROTOCOL.md](PROTOCOL.md)
+*Transport*. Changing the URL while connected reconnects to the new
+target. (In pusher mode only host/port are used; the path is generated.)
+
+### `.wsc gateway mode <raw|pusher>`
+
+Wire protocol. `raw` (default): contract messages go straight over the
+socket to your own gateway. `pusher`: speak the Pusher Channels protocol
+to Laravel Reverb / Soketi / any Pusher-compatible server — see
+[PROTOCOL.md](PROTOCOL.md) *Pusher mode* for the full semantics.
+
+### `.wsc gateway key <app-key>` / `.wsc gateway secret <app-secret>` / `.wsc gateway channel <name>`
+
+Pusher-mode settings. The plugin subscribes to `channel` (default
+`private-euroscope`); for `private-*`/`presence-*` channels it mints the
+standard Pusher **auth token** locally from the app secret
+(HMAC-SHA256 over `socket_id:channel`) — no auth endpoint needed.
+**The secret is stored in plain text in the EuroScope settings file; use a
+dedicated app/secret for this connector.** A channel name without the
+`private-` prefix subscribes publicly, without a token.
+
+```
+.wsc gateway mode pusher
+.wsc gateway url ws://127.0.0.1:8080        (Reverb default port)
+.wsc gateway key my-reverb-key
+.wsc gateway secret my-reverb-secret
+.wsc gateway channel private-euroscope
+.wsc gateway connect
+```
 
 ### `.wsc gateway connect` / `.wsc gateway disconnect`
 
 Opens/closes the connection. While enabled, the plugin reconnects
-automatically with exponential backoff (2 s → 60 s) and sends a
-`session_snapshot` event after every (re)connect.
+automatically with exponential backoff (2 s → 60 s) and re-sends the
+state snapshot after every (re)connect (`session_snapshot` in raw mode;
+`session_reset` + per-flight `flight_updated` in pusher mode). Fatal
+Pusher errors (bad key, app disabled) park reconnection at the maximum
+backoff instead of hammering the server.
 
 ### `.wsc gateway auto <on|off>`
 

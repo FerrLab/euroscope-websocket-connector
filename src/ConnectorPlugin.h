@@ -23,7 +23,7 @@
 #include "JsonApi.h"
 
 #define PLUGIN_NAME "WebSocket Connector"
-#define PLUGIN_VERSION "0.3.0"
+#define PLUGIN_VERSION "0.4.0"
 #define PLUGIN_AUTHOR "FerrLab"
 #define PLUGIN_COPYRIGHT "MIT License - github.com/FerrLab/euroscope-websocket-connector"
 

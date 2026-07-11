@@ -34,6 +34,8 @@ add_library(WebSocketConnector SHARED
     src/ws/WsFrame.cpp
     src/ws/WsHandshake.cpp
     src/ws/WsClient.cpp
+    src/pusher/Crypto.cpp
+    src/pusher/PusherSession.cpp
 )
 
 target_compile_features(WebSocketConnector PRIVATE cxx_std_17)

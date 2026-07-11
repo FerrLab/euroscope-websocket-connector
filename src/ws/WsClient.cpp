@@ -85,10 +85,16 @@ namespace Ws
     void WsClient::Stop()
     {
         m_stop = true;
-        // Closing the socket unblocks any recv/send the thread is in.
+        // shutdown() wakes a thread blocked in recv/send on ALL platforms
+        // (on POSIX, close() alone does not), then close the socket.
         std::lock_guard<std::mutex> lock(m_socketMutex);
         if (m_socket != kInvalidSocket)
         {
+#ifdef _WIN32
+            shutdown(static_cast<SOCKET>(m_socket), SD_BOTH);
+#else
+            shutdown(static_cast<SOCKET>(m_socket), SHUT_RDWR);
+#endif
             closesocket(static_cast<SOCKET>(m_socket));
             m_socket = kInvalidSocket;
         }
@@ -248,10 +254,38 @@ namespace Ws
 
         std::string response;
         std::vector<uint8_t> buffer;  // frame bytes after the handshake
+        int handshakeTicks = 0;
+        const int kHandshakeTimeoutTicks = 300;  // ~15 s at 50 ms per tick
         for (;;)
         {
             if (m_stop)
                 return;
+
+            // Bounded wait: a server that accepted TCP but never answers
+            // must not wedge us in Connecting forever.
+            fd_set readSet;
+            FD_ZERO(&readSet);
+            FD_SET(sock, &readSet);
+            timeval timeout;
+            timeout.tv_sec = 0;
+            timeout.tv_usec = 50 * 1000;
+            const int ready = select(static_cast<int>(sock) + 1, &readSet,
+                                     nullptr, nullptr, &timeout);
+            if (ready < 0)
+            {
+                Fail("select failed during handshake");
+                return;
+            }
+            if (ready == 0)
+            {
+                if (++handshakeTicks >= kHandshakeTimeoutTicks)
+                {
+                    Fail("handshake timeout (no response from server)");
+                    return;
+                }
+                continue;
+            }
+
             char chunk[4096];
             const int n = recv(sock, chunk, sizeof(chunk), 0);
             if (n <= 0)
@@ -283,6 +317,75 @@ namespace Ws
         MessageAssembler assembler;
         int ticksSincePing = 0;
         const int kPingEveryTicks = 600;  // ~30 s at 50 ms per tick
+
+        // Decodes every complete frame currently in `buffer`. Returns
+        // false when the connection must end (Fail() already called).
+        const auto processBuffer = [&]() -> bool {
+            size_t offset = 0;
+            bool keepGoing = true;
+            while (keepGoing)
+            {
+                Frame frame;
+                size_t consumed = 0;
+                std::string error;
+                const DecodeResult dr = TryDecodeFrame(
+                    buffer.data() + offset, buffer.size() - offset, frame,
+                    consumed, error);
+                if (dr == DecodeResult::NeedMore)
+                    break;
+                if (dr == DecodeResult::Error)
+                {
+                    Fail("protocol error: " + error);
+                    keepGoing = false;
+                    break;
+                }
+                offset += consumed;
+
+                switch (assembler.Feed(frame))
+                {
+                    case MessageAssembler::Event::Message:
+                        {
+                            std::lock_guard<std::mutex> lock(m_inMutex);
+                            if (m_inbound.size() < kMaxQueued)
+                                m_inbound.push_back(std::move(assembler.message));
+                        }
+                        break;
+                    case MessageAssembler::Event::Ping:
+                        if (!SendFrame(Opcode::Pong, assembler.control.data(),
+                                       assembler.control.size()))
+                        {
+                            Fail("pong failed");
+                            keepGoing = false;
+                        }
+                        break;
+                    case MessageAssembler::Event::Close:
+                        // acknowledge and finish
+                        SendFrame(Opcode::Close, assembler.control.data(),
+                                  assembler.control.size() >= 2 ? 2 : 0);
+                        Fail("closed by peer");
+                        keepGoing = false;
+                        break;
+                    case MessageAssembler::Event::Error:
+                        Fail("protocol error: " + assembler.error);
+                        keepGoing = false;
+                        break;
+                    case MessageAssembler::Event::Pong:
+                    case MessageAssembler::Event::None:
+                        break;
+                }
+            }
+            if (offset > 0)
+                buffer.erase(buffer.begin(),
+                             buffer.begin() + static_cast<long>(offset));
+            return keepGoing;
+        };
+
+        // The server's first frames may have arrived coalesced with the
+        // handshake response - process that leftover BEFORE waiting for
+        // more bytes, or a server that speaks first (e.g. Pusher's
+        // connection_established) would deadlock us.
+        if (!processBuffer())
+            return;
 
         while (!m_stop)
         {
@@ -346,58 +449,8 @@ namespace Ws
             }
             buffer.insert(buffer.end(), chunk, chunk + n);
 
-            size_t offset = 0;
-            for (;;)
-            {
-                Frame frame;
-                size_t consumed = 0;
-                std::string error;
-                const DecodeResult dr = TryDecodeFrame(
-                    buffer.data() + offset, buffer.size() - offset, frame,
-                    consumed, error);
-                if (dr == DecodeResult::NeedMore)
-                    break;
-                if (dr == DecodeResult::Error)
-                {
-                    Fail("protocol error: " + error);
-                    return;
-                }
-                offset += consumed;
-
-                switch (assembler.Feed(frame))
-                {
-                    case MessageAssembler::Event::Message:
-                        {
-                            std::lock_guard<std::mutex> lock(m_inMutex);
-                            if (m_inbound.size() < kMaxQueued)
-                                m_inbound.push_back(std::move(assembler.message));
-                        }
-                        break;
-                    case MessageAssembler::Event::Ping:
-                        if (!SendFrame(Opcode::Pong, assembler.control.data(),
-                                       assembler.control.size()))
-                        {
-                            Fail("pong failed");
-                            return;
-                        }
-                        break;
-                    case MessageAssembler::Event::Close:
-                        // acknowledge and finish
-                        SendFrame(Opcode::Close, assembler.control.data(),
-                                  assembler.control.size() >= 2 ? 2 : 0);
-                        Fail("closed by peer");
-                        return;
-                    case MessageAssembler::Event::Error:
-                        Fail("protocol error: " + assembler.error);
-                        return;
-                    case MessageAssembler::Event::Pong:
-                    case MessageAssembler::Event::None:
-                        break;
-                }
-            }
-            if (offset > 0)
-                buffer.erase(buffer.begin(),
-                             buffer.begin() + static_cast<long>(offset));
+            if (!processBuffer())
+                return;
         }
 
         // graceful local close

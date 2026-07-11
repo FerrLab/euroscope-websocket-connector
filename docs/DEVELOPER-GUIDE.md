@@ -30,6 +30,12 @@ EuroScope plugin API                                       ┊
                                                            ┊
 Gateway                                  Gateway.{h,cpp}   ┊
  │  reconnect/backoff, counters, snapshot trigger          ┊
+ │  mode raw: contract straight through                    ┊
+ │  mode pusher: frames run through                        ┊
+ │    Pusher::PusherSession    pusher/PusherSession.{h,cpp}┊
+ │      protocol-7 state machine: /app/{key} path,         ┊
+ │      subscribe + HMAC auth token (pusher/Crypto),       ┊
+ │      client-event wrap/unwrap, pusher:ping/error        ┊
  └─► Ws::WsClient                    ws/WsClient.{h,cpp} ══╪══ thread-safe
       connect/handshake/frame pump on its own thread       ┊   queues
       built on the pure codec:                             ┊
@@ -155,11 +161,23 @@ ctest --test-dir build-tests --output-on-failure
 - `tests/ws_test.cpp` — the WebSocket codec against the RFC 6455 vectors:
   handshake key/accept, URL parsing, frame encode/decode, fragmentation,
   the message assembler.
+- `tests/pusher_test.cpp` — the Pusher layer: SHA-256/HMAC-SHA256 against
+  the FIPS 180-4 / RFC 4231 vectors, the auth token against the example
+  in Pusher's own documentation, and the full `PusherSession` state
+  machine (subscribe flow, ping/pong, fatal vs. transient errors,
+  client-event wrap/unwrap).
 - `tests/ws_client_test.cpp` (UNIX only) — the REAL `WsClient` code,
   end-to-end over TCP against an in-process scripted server: handshake,
   echo, server push, fragmented messages, ping/pong, close and error
   paths. (`WsClient.cpp` has a small POSIX `#ifdef` branch exactly so this
   test can exist; the production DLL uses the Win32 branch.)
+- `tests/pusher_e2e_test.cpp` (UNIX only) — the real
+  `Gateway`+`PusherSession`+`WsClient` stack against a scripted
+  Pusher-protocol server: verified auth token on subscribe, connected-only
+  -after-subscribe gating, client-event exchange in both directions, and
+  the fatal `pusher:error` → max-backoff path. This test caught three
+  real bugs during development (handshake-coalescing deadlock, final
+  messages lost on close, unbounded handshake wait) — keep it green.
 
 **Add a test whenever you add or change an action, event, or codec
 behaviour.** The tests are deliberately a standalone CMake project because
@@ -187,11 +205,13 @@ The WebSocket transport is implemented as described above (own RFC 6455
 client — zero dependencies, x86-safe, codec fully unit-tested; see
 research doc §4 for why not IXWebSocket/Boost). Candidate next steps:
 
-- **`wss://` (TLS)** — required before any gateway leaves the LAN.
-  Options: Windows Schannel wrapped around the socket, or vendoring
-  mbedTLS. Isolate it inside `WsClient` so nothing else changes.
-- **Authentication** — the contract has no auth; a gateway token could
-  ride as a header in `Ws::BuildRequest` or as a first `command`.
+- **`wss://` (TLS)** — required before any gateway leaves the LAN, and
+  for hosted pusher.com. Options: Windows Schannel wrapped around the
+  socket, or vendoring mbedTLS. Isolate it inside `WsClient` so nothing
+  else changes.
+- **Raw-mode authentication** — pusher mode has private-channel token
+  auth; raw mode still has none. A gateway token could ride as a header
+  in `Ws::BuildRequest` or as a first `command`.
 - **Controller events** — `controller_updated`/`controller_removed` are
   reserved in the spec; wire `OnControllerPositionUpdate`/`Disconnect`
   through the same EmitEvent path.

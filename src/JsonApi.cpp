@@ -339,6 +339,13 @@ std::string JsonApi::EventPositionUpdated(const PositionUpdate& position) const
     return j.dump();
 }
 
+std::string JsonApi::EventSessionReset() const
+{
+    json j = Envelope("event", "session_reset", std::string());
+    j["payload"] = json::object();
+    return j.dump();
+}
+
 std::string JsonApi::EventSessionSnapshot(const std::vector<FlightInfo>& flights) const
 {
     json j = Envelope("event", "session_snapshot", std::string());

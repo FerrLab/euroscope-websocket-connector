@@ -7,10 +7,13 @@ snapshots), and accepts JSON commands back (modify flight plans, ground
 states, SID/STAR, messages). Everything is also driven manually via
 `.wsc` dot-commands for testing.
 
-> **Status: phase 2 — WebSocket transport implemented.**
+> **Status: phase 2+ — WebSocket transport with Pusher compatibility.**
 > The plugin is a reconnecting WebSocket client (`.wsc gateway ...`,
 > zero-dependency RFC 6455 implementation, `ws://` only for now) carrying
-> the standardized JSON contract ([docs/PROTOCOL.md](docs/PROTOCOL.md)).
+> the standardized JSON contract ([docs/PROTOCOL.md](docs/PROTOCOL.md)) in
+> two modes: **raw** (your own gateway) or **Pusher protocol** (Laravel
+> Reverb / Soketi / Pusher Channels) with private-channel **token
+> authentication** (HMAC-SHA256, minted locally from the app secret).
 > Needs real-world testing inside EuroScope — see *Verification status*
 > in [docs/BUILDING.md](docs/BUILDING.md).
 
@@ -51,14 +54,24 @@ The JSON contract for external systems: **[docs/PROTOCOL.md](docs/PROTOCOL.md)**
 
 3. Type `.wsc help` in the command line.
 
-4. Connect to your gateway:
+4. Connect — to a Pusher-compatible server (Laravel Reverb, Soketi):
+
+   ```
+   .wsc gateway mode pusher
+   .wsc gateway url ws://127.0.0.1:8080
+   .wsc gateway key <app-key>
+   .wsc gateway secret <app-secret>
+   .wsc gateway connect
+   ```
+
+   …or to your own raw WebSocket gateway:
 
    ```
    .wsc gateway url ws://127.0.0.1:3000/session
    .wsc gateway connect
    ```
 
-   The plugin sends a `session_snapshot`, streams events, and answers
+   The plugin snapshots the session, streams events, and answers
    `command` messages per [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
 Test on a [SweatBox/playback session](https://www.euroscope.hu/wp/), not on

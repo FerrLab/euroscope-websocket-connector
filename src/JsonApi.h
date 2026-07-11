@@ -59,6 +59,10 @@ public:
     // Full session state; sent right after (re)connecting to a gateway so
     // consumers can rebuild their world before incremental events resume.
     std::string EventSessionSnapshot(const std::vector<FlightInfo>& flights) const;
+    // "Clear your world, full state follows as flight_updated events."
+    // Used instead of the (potentially huge) snapshot on transports with
+    // small message-size limits - i.e. Pusher mode.
+    std::string EventSessionReset() const;
 
 private:
     IActions& m_actions;
