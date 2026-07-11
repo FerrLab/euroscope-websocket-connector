@@ -210,7 +210,7 @@ std::string JsonApi::HandleMessage(const std::string& messageJson)
 
         if (action == "ping")
         {
-            result["plugin"] = "euroscope-websocket-connector";
+            result["plugin"] = "euroscope-longpolling-connector";
             result["protocolVersion"] = kProtocolVersion;
         }
         else if (action == "list_flights")

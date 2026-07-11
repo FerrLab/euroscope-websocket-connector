@@ -1,4 +1,4 @@
-// Unit tests for the ".wsc gateway config" argument parser
+// Unit tests for the ".lpc gateway config" argument parser
 // (src/GatewayConfig.cpp): base64 of "<url>:<token>" in one command-line
 // token, because EuroScope's command line does not pass ':' characters
 // through to plugins.

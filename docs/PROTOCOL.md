@@ -6,7 +6,7 @@ answers each command with a **response** and pushes unsolicited **events**
 (flight updated, flight removed, position updated).
 
 The contract is transport-independent — it can be exercised through the
-`.wsc json <message>` and `.wsc events` commands — and is carried over
+`.lpc json <message>` and `.lpc events` commands — and is carried over
 plain **HTTPS** by the plugin's gateway connection: long polling to
 receive, POST to send (see *Transport* below).
 Implemented in [`src/JsonApi.cpp`](../src/JsonApi.cpp) — keep code and this
@@ -93,7 +93,7 @@ aircraft) come back as `ok:false` with the reason in `error`.
 EuroScope's input path, not that it was delivered on the network. The
 injection and its consumed-by-EuroScope check happen on the plugin's
 next two timer ticks (~2 s total); the verdict is reported only in the
-local WSC chat tab (the contract has no follow-up message for it).
+local LPC chat tab (the contract has no follow-up message for it).
 
 ## Events (plugin → backend/frontend)
 
@@ -107,9 +107,9 @@ local WSC chat tab (the contract has no follow-up message for it).
 Reserved (not emitted yet): `controller_updated`, `controller_removed`,
 `metar`.
 
-The event stream can be inspected without a gateway: `.wsc events on`
-(flight events) and `.wsc events pos on` (position events — noisy) print
-each event JSON to the WSC chat tab exactly as it goes over the wire.
+The event stream can be inspected without a gateway: `.lpc events on`
+(flight events) and `.lpc events pos on` (position events — noisy) print
+each event JSON to the LPC chat tab exactly as it goes over the wire.
 
 ## Transport
 
@@ -119,7 +119,7 @@ requests are made with **WinHTTP** — TLS, certificate validation against
 the OS trust store, and proxy settings are handled by the operating
 system. `http://` is accepted for local development.
 
-Configuration (persisted): `.wsc gateway config <base64>` where the
+Configuration (persisted): `.lpc gateway config <base64>` where the
 argument is base64 of `<url>:<token>` — one command, because EuroScope's
 command line does not pass `:` characters through to plugins (see
 [COMMANDS.md](COMMANDS.md) §8). A backend onboarding a controller should
@@ -162,7 +162,7 @@ pump).
   state and retries back off exponentially (2 s → 60 s).
 - `401`/`403` park the retry at the maximum immediately — fix the token.
 - Messages produced while unhealthy are **dropped** (and counted in
-  `.wsc gateway status`); on every unhealthy → healthy transition the
+  `.lpc gateway status`); on every unhealthy → healthy transition the
   plugin re-sends a `session_snapshot`, which makes the backend
   consistent again.
 
@@ -310,15 +310,15 @@ Every command failure is a `type:"response"`, `ok:false` message with
 
 ## Testing without a backend
 
-Type commands directly into EuroScope (everything after `.wsc json` is
+Type commands directly into EuroScope (everything after `.lpc json` is
 passed through verbatim), and enable the event stream:
 
 ```
-.wsc json {"type":"command","action":"ping"}
-.wsc json {"type":"command","callsign":"DLH4TX","action":"get_flight"}
-.wsc json {"type":"command","callsign":"DLH4TX","action":"set_cleared_altitude","payload":{"feet":12000}}
-.wsc events on
-.wsc events pos on
+.lpc json {"type":"command","action":"ping"}
+.lpc json {"type":"command","callsign":"DLH4TX","action":"get_flight"}
+.lpc json {"type":"command","callsign":"DLH4TX","action":"set_cleared_altitude","payload":{"feet":12000}}
+.lpc events on
+.lpc events pos on
 ```
 
 The printed messages are byte-for-byte what travels over the HTTPS

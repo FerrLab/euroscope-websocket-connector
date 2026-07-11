@@ -4,11 +4,11 @@
 //
 // Responsibilities:
 //   * plugin registration (name/version/compatibility code)
-//   * parsing of ".wsc ..." dot-commands typed in the EuroScope command line
+//   * parsing of ".lpc ..." dot-commands typed in the EuroScope command line
 //   * formatting results back to the user via DisplayUserMessage
 //
 // All EuroScope-facing operations are delegated to Actions (Actions.h) so the
-// same operations can later be driven by a WebSocket endpoint instead of the
+// same operations can be driven by the HTTPS gateway as well as the
 // command line. Keep this class free of business logic.
 
 #include <string>
@@ -22,7 +22,7 @@
 #include "Gateway.h"
 #include "JsonApi.h"
 
-#define PLUGIN_NAME "WebSocket Connector"
+#define PLUGIN_NAME "EuroScope Long Polling Connector"
 // Release builds stamp the real semantic version at compile time
 // (cmake -DPLUGIN_VERSION=x.y.z, done by the release job in
 // .github/workflows/ci.yml). The fallback makes local builds
@@ -31,10 +31,10 @@
 #define PLUGIN_VERSION "0.0.0-dev"
 #endif
 #define PLUGIN_AUTHOR "FerrLab"
-#define PLUGIN_COPYRIGHT "MIT License - github.com/FerrLab/euroscope-websocket-connector"
+#define PLUGIN_COPYRIGHT "MIT License - github.com/FerrLab/euroscope-longpolling-connector"
 
 // Name of the chat handler (tab) our output appears under in EuroScope.
-#define MESSAGE_HANDLER "WSC"
+#define MESSAGE_HANDLER "LPC"
 
 class ConnectorPlugin : public EuroScopePlugIn::CPlugIn
 {
@@ -47,8 +47,8 @@ public:
     bool OnCompileCommand(const char* sCommandLine) override;
 
     // Event sources for the JSON contract's "event" messages
-    // (docs/PROTOCOL.md). Today the events are printed to the WSC chat tab
-    // when enabled via ".wsc events"; phase 2 pushes them to the gateway.
+    // (docs/PROTOCOL.md): printed to the LPC chat tab when enabled via
+    // ".lpc events", and pushed to the gateway while connected.
     void OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan FlightPlan) override;
     void OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFlightPlan FlightPlan,
                                                   int DataType) override;
@@ -65,7 +65,7 @@ private:
     JsonApi m_jsonApi;
     Gateway m_gateway;
 
-    // Event-stream toggles (".wsc events ...") - printing to the chat tab.
+    // Event-stream toggles (".lpc events ...") - printing to the chat tab.
     // Position events are separate because they fire for every target
     // every few seconds.
     bool m_flightEvents = false;
@@ -83,13 +83,13 @@ private:
     // gateway when connected).
     void EmitEvent(const std::string& eventJson, bool isPosition);
 
-    // Writes one line to the "WSC" chat handler.
+    // Writes one line to the "LPC" chat handler.
     void Say(const std::string& text);
     // Writes a multi-line text (splits on '\n').
     void SayLines(const std::string& text);
 
     // Sub-command handlers. `tokens` is the whitespace-split command line
-    // (tokens[0] == ".wsc"), `line` the original string for commands that
+    // (tokens[0] == ".lpc"), `line` the original string for commands that
     // need the raw remainder (message text, scratchpad content).
     void CmdHelp();
     void CmdList(const std::vector<std::string>& tokens);

@@ -175,11 +175,11 @@ namespace
     }
 
     // Never dispatches inline: when called from OnCompileCommand the
-    // consumed ".wsc ..." line is still sitting in the command line and
+    // consumed ".lpc ..." line is still sitting in the command line and
     // EuroScope clears it AFTER the callback returns - inline WM_SETTEXT
     // would be wiped before the posted key processes, and the pre-clear
     // command would be captured as the "previous" text to restore
-    // (observed live: the .wsc command reappeared in the command line).
+    // (observed live: the .lpc command reappeared in the command line).
     // Dispatch happens on the next Pump() tick, when EuroScope is idle.
     ChatInjection::SendResult Enqueue(const std::string& text,
                                       const std::string& label, WORD key)
@@ -187,7 +187,7 @@ namespace
         g_queue.push_back({text, label, key});
         ChatInjection::SendResult result;
         result.ok = true;
-        result.detail = "queued - result follows in the WSC tab";
+        result.detail = "queued - result follows in the LPC tab";
         return result;
     }
 }

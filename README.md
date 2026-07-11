@@ -1,4 +1,4 @@
-# euroscope-websocket-connector
+# euroscope-longpolling-connector
 
 A [EuroScope](https://www.euroscope.hu/wp/) plugin that connects the
 controller's session to a web backend over plain **HTTPS**: it streams the
@@ -6,7 +6,7 @@ session as JSON messages (flights, positions, snapshots) via `POST` and
 receives JSON commands back (modify flight plans, ground states, SID/STAR,
 messages) via **long polling**. The backend — e.g. a Laravel app — fans the
 data out to browsers however it likes (typically Soketi/Reverb).
-Everything is also driven manually via `.wsc` dot-commands for testing.
+Everything is also driven manually via `.lpc` dot-commands for testing.
 
 > **Status: HTTPS transport (long poll + POST) with bearer-token auth.**
 > TLS, certificate validation and proxies are handled by Windows (WinHTTP)
@@ -20,13 +20,13 @@ Everything is also driven manually via `.wsc` dot-commands for testing.
 
 | # | Capability | Command |
 |---|------------|---------|
-| 1 | List all flights known to the session | `.wsc list [filter]`, `.wsc show <cs>` |
-| 2 | Modify flight-plan / controller-assigned parameters | `.wsc set <cs> <field> <value>` |
-| 3 | Send a text message to the primary frequency *(experimental)* | `.wsc freq <text>` |
-| 4 | Send a private message to a user *(experimental)* | `.wsc msg <cs> <text>` |
-| 5 | Set scratch-pad content, incl. ground states (PUSH/TAXI/…) | `.wsc pad <cs> <text>`, `.wsc state <cs> <token>` |
-| 6 | Read & set SID/STAR | `.wsc show <cs>`, `.wsc sid <cs> <SID[/RWY]>`, `.wsc star <cs> <STAR>` |
-| — | **Standardized JSON contract** — all of the above as bidirectional `{type, callsign, action, payload}` messages | `.wsc json <message>`, `.wsc events on` |
+| 1 | List all flights known to the session | `.lpc list [filter]`, `.lpc show <cs>` |
+| 2 | Modify flight-plan / controller-assigned parameters | `.lpc set <cs> <field> <value>` |
+| 3 | Send a text message to the primary frequency *(experimental)* | `.lpc freq <text>` |
+| 4 | Send a private message to a user *(experimental)* | `.lpc msg <cs> <text>` |
+| 5 | Set scratch-pad content, incl. ground states (PUSH/TAXI/…) | `.lpc pad <cs> <text>`, `.lpc state <cs> <token>` |
+| 6 | Read & set SID/STAR | `.lpc show <cs>`, `.lpc sid <cs> <SID[/RWY]>`, `.lpc star <cs> <STAR>` |
+| — | **Standardized JSON contract** — all of the above as bidirectional `{type, callsign, action, payload}` messages | `.lpc json <message>`, `.lpc events on` |
 
 Full command reference with examples and caveats: **[docs/COMMANDS.md](docs/COMMANDS.md)**.
 The JSON contract for external systems: **[docs/PROTOCOL.md](docs/PROTOCOL.md)**.
@@ -49,17 +49,19 @@ The JSON contract for external systems: **[docs/PROTOCOL.md](docs/PROTOCOL.md)**
    Details and troubleshooting: [docs/BUILDING.md](docs/BUILDING.md).
 
 2. In EuroScope: `Other Set` → `Plug-Ins…` → `Load` →
-   `build/Release/WebSocketConnector.dll`.
+   `build/Release/EuroscopeLongPollingConnector.dll`.
 
-3. Type `.wsc help` in the command line.
+3. Type `.lpc help` in the command line.
 
 4. Connect to your backend:
 
    ```
-   .wsc gateway url https://api.example.com/euroscope
-   .wsc gateway token <bearer-token>
-   .wsc gateway connect
+   .lpc gateway config <base64 of url:token>
+   .lpc gateway connect
    ```
+
+   (One base64 argument because EuroScope's command line does not pass
+   `:` characters through — see [docs/COMMANDS.md](docs/COMMANDS.md) §8.)
 
    The plugin POSTs a `session_snapshot` + live events to
    `{base}/messages` and long-polls `{base}/poll` for commands, per

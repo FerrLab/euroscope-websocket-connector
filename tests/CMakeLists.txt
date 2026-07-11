@@ -9,7 +9,7 @@
 # configure on non-Windows / 64-bit, while the tests build everywhere.)
 
 cmake_minimum_required(VERSION 3.20)
-project(euroscope-websocket-connector-tests LANGUAGES CXX)
+project(euroscope-longpolling-connector-tests LANGUAGES CXX)
 
 enable_testing()
 

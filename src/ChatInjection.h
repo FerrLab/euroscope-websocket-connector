@@ -29,11 +29,11 @@
 // Posting has two consequences. (1) The key is processed only after the
 // current plugin callback returns, so "did EuroScope consume it?" cannot
 // be checked synchronously. (2) A send must not even START inside a
-// command callback: OnCompileCommand runs while the consumed ".wsc ..."
+// command callback: OnCompileCommand runs while the consumed ".lpc ..."
 // line is still sitting in the command line, and EuroScope clears the box
 // AFTER the callback returns — verified live: inline-injected text was
 // wiped before the posted key processed (nothing sent, box empty, a false
-// "consumed" verdict) and the pre-clear ".wsc" command was captured as
+// "consumed" verdict) and the pre-clear ".lpc" command was captured as
 // the "previous" content and wrongly restored. Sends therefore always
 // wait in a queue: Pump(), called once per second (OnTimer), dispatches
 // one send (WM_SETTEXT + posted key) while EuroScope is idle, then

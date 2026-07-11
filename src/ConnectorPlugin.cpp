@@ -220,7 +220,7 @@ ConnectorPlugin::ConnectorPlugin()
 {
     LoadSettings();
     Say(std::string(PLUGIN_NAME) + " v" PLUGIN_VERSION
-        " loaded. Type '.wsc help' for available commands.");
+        " loaded. Type '.lpc help' for available commands.");
     if (m_gateway.IsEnabled())
         Say("Auto-connecting to gateway " + m_gateway.GetUrl() + " ...");
 }
@@ -281,7 +281,7 @@ bool ConnectorPlugin::OnCompileCommand(const char* sCommandLine)
 {
     const std::string line = sCommandLine ? sCommandLine : "";
     std::vector<std::string> tokens = Tokenize(line);
-    if (tokens.empty() || Lower(tokens[0]) != ".wsc")
+    if (tokens.empty() || Lower(tokens[0]) != ".lpc")
         return false; // not ours - let EuroScope / other plugins handle it
 
     const std::string sub = tokens.size() > 1 ? Lower(tokens[1]) : "help";
@@ -313,30 +313,30 @@ bool ConnectorPlugin::OnCompileCommand(const char* sCommandLine)
     else if (sub == "gateway")
         CmdGateway(tokens);
     else
-        Say("Unknown sub-command '" + tokens[1] + "'. Type '.wsc help'.");
+        Say("Unknown sub-command '" + tokens[1] + "'. Type '.lpc help'.");
 
-    return true; // consume every ".wsc ..." line, even on bad syntax
+    return true; // consume every ".lpc ..." line, even on bad syntax
 }
 
 void ConnectorPlugin::CmdHelp()
 {
     Say(std::string(PLUGIN_NAME) + " v" PLUGIN_VERSION " - commands (full docs: docs/COMMANDS.md):");
-    Say(".wsc list [filter]            - list flight plans (filter: callsign prefix or ICAO of dep/arr)");
-    Say(".wsc show <callsign>          - full detail of one flight (incl. SID/STAR, scratch pad)");
-    Say(".wsc set <cs> calt <FL240|24000|ils|visual|clear> - cleared altitude");
-    Say(".wsc set <cs> rfl <FL340|34000>  - final altitude   | hdg <deg|0> - heading");
-    Say(".wsc set <cs> spd <kts|0> | mach <0.78|0> | rate <fpm|0> - speeds/rate");
-    Say(".wsc set <cs> sqk <code> | dct <point>   - squawk / direct-to");
-    Say(".wsc pad <cs> <text|clear>    - set scratch pad");
-    Say(".wsc state <cs> <NSTS|STUP|PUSH|TAXI|DEPA|TXIN|PARK|CLEA|NOTC|ARR> - ground state/clearance flag");
-    Say(".wsc sid <cs> <SID[/RWY]> | star <cs> <STAR> - assign SID/STAR");
-    Say(".wsc msg <cs> <text>          - private message (experimental, UI injection)");
-    Say(".wsc freq <text>              - text to primary frequency (experimental, UI injection)");
-    Say(".wsc json <message>           - run a JSON contract command (docs/PROTOCOL.md)");
-    Say(".wsc events <on|off|pos on|pos off|status> - print the JSON event stream");
-    Say(".wsc gateway config <base64 of url:token> - set backend URL + token in one command");
-    Say(".wsc gateway connect | disconnect | status");
-    Say(".wsc gateway auto <on|off> | pos <on|off>  - autoconnect / send positions");
+    Say(".lpc list [filter]            - list flight plans (filter: callsign prefix or ICAO of dep/arr)");
+    Say(".lpc show <callsign>          - full detail of one flight (incl. SID/STAR, scratch pad)");
+    Say(".lpc set <cs> calt <FL240|24000|ils|visual|clear> - cleared altitude");
+    Say(".lpc set <cs> rfl <FL340|34000>  - final altitude   | hdg <deg|0> - heading");
+    Say(".lpc set <cs> spd <kts|0> | mach <0.78|0> | rate <fpm|0> - speeds/rate");
+    Say(".lpc set <cs> sqk <code> | dct <point>   - squawk / direct-to");
+    Say(".lpc pad <cs> <text|clear>    - set scratch pad");
+    Say(".lpc state <cs> <NSTS|STUP|PUSH|TAXI|DEPA|TXIN|PARK|CLEA|NOTC|ARR> - ground state/clearance flag");
+    Say(".lpc sid <cs> <SID[/RWY]> | star <cs> <STAR> - assign SID/STAR");
+    Say(".lpc msg <cs> <text>          - private message (experimental, UI injection)");
+    Say(".lpc freq <text>              - text to primary frequency (experimental, UI injection)");
+    Say(".lpc json <message>           - run a JSON contract command (docs/PROTOCOL.md)");
+    Say(".lpc events <on|off|pos on|pos off|status> - print the JSON event stream");
+    Say(".lpc gateway config <base64 of url:token> - set backend URL + token in one command");
+    Say(".lpc gateway connect | disconnect | status");
+    Say(".lpc gateway auto <on|off> | pos <on|off>  - autoconnect / send positions");
 }
 
 void ConnectorPlugin::CmdList(const std::vector<std::string>& tokens)
@@ -358,14 +358,14 @@ void ConnectorPlugin::CmdList(const std::vector<std::string>& tokens)
         Say(FormatSummaryLine(flights[i]));
     if (flights.size() > kMaxLines)
         Say("(+" + std::to_string(flights.size() - kMaxLines) +
-            " more - narrow it down with '.wsc list <filter>')");
+            " more - narrow it down with '.lpc list <filter>')");
 }
 
 void ConnectorPlugin::CmdShow(const std::vector<std::string>& tokens)
 {
     if (tokens.size() < 3)
     {
-        Say("Usage: .wsc show <callsign>");
+        Say("Usage: .lpc show <callsign>");
         return;
     }
     FlightInfo info;
@@ -382,7 +382,7 @@ void ConnectorPlugin::CmdSet(const std::vector<std::string>& tokens)
 {
     if (tokens.size() < 5)
     {
-        Say("Usage: .wsc set <callsign> <calt|rfl|hdg|spd|mach|rate|sqk|dct> <value>");
+        Say("Usage: .lpc set <callsign> <calt|rfl|hdg|spd|mach|rate|sqk|dct> <value>");
         return;
     }
     const std::string& callsign = tokens[2];
@@ -449,7 +449,7 @@ void ConnectorPlugin::CmdPad(const std::vector<std::string>& tokens, const std::
 {
     if (tokens.size() < 4)
     {
-        Say("Usage: .wsc pad <callsign> <text|clear>");
+        Say("Usage: .lpc pad <callsign> <text|clear>");
         return;
     }
     // Keep the raw remainder so multi-word pad content survives.
@@ -463,7 +463,7 @@ void ConnectorPlugin::CmdState(const std::vector<std::string>& tokens)
 {
     if (tokens.size() < 4)
     {
-        Say("Usage: .wsc state <callsign> <NSTS|STUP|PUSH|TAXI|DEPA|TXIN|PARK|CLEA|NOTC|ARR>");
+        Say("Usage: .lpc state <callsign> <NSTS|STUP|PUSH|TAXI|DEPA|TXIN|PARK|CLEA|NOTC|ARR>");
         return;
     }
     Say(m_actions.BroadcastScratchPadToken(tokens[2], tokens[3]).message);
@@ -473,8 +473,8 @@ void ConnectorPlugin::CmdSid(const std::vector<std::string>& tokens, bool star)
 {
     if (tokens.size() < 4)
     {
-        Say(star ? "Usage: .wsc star <callsign> <STAR>"
-                 : "Usage: .wsc sid <callsign> <SID[/RWY]>");
+        Say(star ? "Usage: .lpc star <callsign> <STAR>"
+                 : "Usage: .lpc sid <callsign> <SID[/RWY]>");
         return;
     }
     const ActionResult r = star ? m_actions.SetStar(tokens[2], tokens[3])
@@ -486,7 +486,7 @@ void ConnectorPlugin::CmdMsg(const std::vector<std::string>& tokens, const std::
 {
     if (tokens.size() < 4)
     {
-        Say("Usage: .wsc msg <callsign> <message text>");
+        Say("Usage: .lpc msg <callsign> <message text>");
         return;
     }
     const std::string text = RemainderAfterTokens(line, 3);
@@ -502,7 +502,7 @@ void ConnectorPlugin::CmdFreq(const std::vector<std::string>& tokens, const std:
 {
     if (tokens.size() < 3)
     {
-        Say("Usage: .wsc freq <message text>");
+        Say("Usage: .lpc freq <message text>");
         return;
     }
     const std::string text = RemainderAfterTokens(line, 2);
@@ -515,12 +515,12 @@ void ConnectorPlugin::CmdJson(const std::vector<std::string>& tokens, const std:
 {
     if (tokens.size() < 3)
     {
-        Say("Usage: .wsc json {\"type\":\"command\",\"callsign\":\"DLH4TX\",\"action\":\"get_flight\"}");
+        Say("Usage: .lpc json {\"type\":\"command\",\"callsign\":\"DLH4TX\",\"action\":\"get_flight\"}");
         Say("Contract reference: docs/PROTOCOL.md");
         return;
     }
-    // Everything after ".wsc json" is the raw message; the response is the
-    // exact payload a WebSocket client would receive.
+    // Everything after ".lpc json" is the raw message; the response is the
+    // exact payload a gateway backend would receive.
     Say(m_jsonApi.HandleMessage(RemainderAfterTokens(line, 2)));
 }
 
@@ -539,7 +539,7 @@ void ConnectorPlugin::CmdEvents(const std::vector<std::string>& tokens)
         m_positionEvents = false;
     else if (a != "status")
     {
-        Say("Usage: .wsc events <on|off|pos on|pos off|status>");
+        Say("Usage: .lpc events <on|off|pos on|pos off|status>");
         return;
     }
     Say(std::string("Event stream: flight events ") +
@@ -650,7 +650,7 @@ void ConnectorPlugin::CmdGateway(const std::vector<std::string>& tokens)
         // token arrive together as base64("<url>:<token>").
         if (b.empty())
         {
-            Say("Usage: .wsc gateway config <base64 of url:token>");
+            Say("Usage: .lpc gateway config <base64 of url:token>");
             Say("Generate it from 'https://host[:port]/base:<bearer-token>' "
                 "(your backend usually shows it ready to copy).");
             return;
@@ -672,13 +672,13 @@ void ConnectorPlugin::CmdGateway(const std::vector<std::string>& tokens)
         SaveSetting("GatewayToken", "Backend bearer token", config.token);
         Say("Gateway configured: " + config.url + ", token set" +
             (m_gateway.IsEnabled() ? " (reconnecting)"
-                                   : " - '.wsc gateway connect' to connect"));
+                                   : " - '.lpc gateway connect' to connect"));
     }
     else if (a == "url")
     {
         if (b.empty())
         {
-            Say("Usage: .wsc gateway url https://host[:port]/base-path");
+            Say("Usage: .lpc gateway url https://host[:port]/base-path");
             return;
         }
         const std::string error = m_gateway.SetUrl(b);
@@ -689,13 +689,13 @@ void ConnectorPlugin::CmdGateway(const std::vector<std::string>& tokens)
         }
         SaveSetting("GatewayUrl", "Backend base URL (https)", b);
         Say("Gateway URL set to " + b +
-            (m_gateway.IsEnabled() ? " (reconnecting)" : " - '.wsc gateway connect' to connect"));
+            (m_gateway.IsEnabled() ? " (reconnecting)" : " - '.lpc gateway connect' to connect"));
     }
     else if (a == "token")
     {
         if (b.empty())
         {
-            Say("Usage: .wsc gateway token <bearer-token>");
+            Say("Usage: .lpc gateway token <bearer-token>");
             return;
         }
         m_gateway.SetToken(b);
@@ -717,7 +717,7 @@ void ConnectorPlugin::CmdGateway(const std::vector<std::string>& tokens)
     {
         if (b != "on" && b != "off")
         {
-            Say("Usage: .wsc gateway auto <on|off>");
+            Say("Usage: .lpc gateway auto <on|off>");
             return;
         }
         SaveSetting("GatewayAuto", "Auto-connect to the gateway on load",
@@ -729,7 +729,7 @@ void ConnectorPlugin::CmdGateway(const std::vector<std::string>& tokens)
     {
         if (b != "on" && b != "off")
         {
-            Say("Usage: .wsc gateway pos <on|off>");
+            Say("Usage: .lpc gateway pos <on|off>");
             return;
         }
         m_gatewayPositions = b == "on";
@@ -752,6 +752,6 @@ void ConnectorPlugin::CmdGateway(const std::vector<std::string>& tokens)
     }
     else
     {
-        Say("Usage: .wsc gateway <config|url|token|connect|disconnect|auto on|off|pos on|off|status>");
+        Say("Usage: .lpc gateway <config|url|token|connect|disconnect|auto on|off|pos on|off|status>");
     }
 }

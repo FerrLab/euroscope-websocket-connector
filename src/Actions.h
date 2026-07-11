@@ -7,9 +7,9 @@
 // call into it (through IActions), so behaviour stays identical no matter
 // where a request comes from:
 //
-//   * ConnectorPlugin  — ".wsc ..." dot-commands (manual/testing)
+//   * ConnectorPlugin  — ".lpc ..." dot-commands (manual/testing)
 //   * JsonApi          — the standardized JSON contract (docs/PROTOCOL.md),
-//                        later carried over WebSocket
+//                        carried over the HTTPS gateway
 //
 // Reads return plain structs (FlightInfo); writes return ActionResult.
 // No formatting and no JSON in here — presentation belongs to the callers.

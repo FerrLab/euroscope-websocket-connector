@@ -12,7 +12,7 @@ EuroScope (32-bit MFC app, UI thread)                      ┊ worker threads
  │  loads DLL, calls EuroScopePlugInInit()   dllmain.cpp   ┊
  ▼                                                         ┊
 ConnectorPlugin : CPlugIn          ConnectorPlugin.{h,cpp} ┊
- │  OnCompileCommand(".wsc ...") → parse → dispatch        ┊
+ │  OnCompileCommand(".lpc ...") → parse → dispatch        ┊
  │  On...Update callbacks → event JSON → EmitEvent         ┊
  │  OnTimer (1 Hz) → Gateway::Tick → inbound commands      ┊
  │    → JsonApi::HandleMessage → responses back out        ┊
@@ -190,10 +190,10 @@ test procedure:
    changes, verify the effect in the departure list ground-state column and
    in a second EuroScope instance if available (sync check).
 4. For `ChatInjection`, verify both the success path and the failure path
-   (e.g. `.wsc msg NOSUCHUSER hi` — EuroScope accepts the command, so the
+   (e.g. `.lpc msg NOSUCHUSER hi` — EuroScope accepts the command, so the
    *plugin* reports success; delivery failure shows in EuroScope's own
    chat, which is expected and documented behaviour). Note the verdict
-   ("sent" / "FAILED") arrives in the WSC tab about two seconds after the
+   ("sent" / "FAILED") arrives in the LPC tab about two seconds after the
    command — the injection dispatches on the next timer tick (never
    during command processing) and is verified on the tick after that.
 

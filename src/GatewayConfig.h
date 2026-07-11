@@ -1,6 +1,6 @@
 #pragma once
 
-// Parser for the ".wsc gateway config <base64>" argument.
+// Parser for the ".lpc gateway config <base64>" argument.
 //
 // EuroScope's command line does not pass ':' characters through to
 // plugins, so URLs (and "url + token" as two commands) cannot be typed

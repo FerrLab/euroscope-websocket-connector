@@ -21,10 +21,10 @@
 //   plugin            --event---->  backend/frontend  (unsolicited)
 //
 // HandleMessage never throws and always returns valid JSON, so a transport
-// (today: the ".wsc json" command; later: the WebSocket client) can pass
-// data through blindly. The Event* builders produce the plugin→outside
-// messages; phase 2 sends them over the socket, today ".wsc events on"
-// prints them so the stream can be inspected.
+// (the ".lpc json" command or the HTTPS gateway) can pass data through
+// blindly. The Event* builders produce the plugin→outside messages; they
+// go to the gateway while connected, and ".lpc events on" prints them so
+// the stream can be inspected.
 //
 // Threading: must be called on the EuroScope main thread, because it calls
 // straight into the real Actions implementation.

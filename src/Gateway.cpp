@@ -59,9 +59,9 @@ std::string Gateway::Enable()
     if (m_enabled)
         return std::string();
     if (!m_url.ok)
-        return "no backend URL configured - use: .wsc gateway url https://host/base";
+        return "no backend URL configured - use: .lpc gateway url https://host/base";
     if (m_token.empty())
-        return "no auth token configured - use: .wsc gateway token <token>";
+        return "no auth token configured - use: .lpc gateway token <token>";
     if (!m_factory)
         return "no HTTP backend available on this platform";
 

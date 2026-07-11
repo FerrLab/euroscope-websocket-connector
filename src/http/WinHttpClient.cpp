@@ -110,7 +110,7 @@ namespace Http
                         return r;
                     }
                     m_session = WinHttpOpen(
-                        L"euroscope-websocket-connector",
+                        L"euroscope-longpolling-connector",
                         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                         WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
                     if (!m_session)

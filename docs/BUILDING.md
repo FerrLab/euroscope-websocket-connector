@@ -20,7 +20,7 @@ cmake -B build -A Win32
 cmake --build build --config Release
 ```
 
-The result is `build\Release\WebSocketConnector.dll`.
+The result is `build\Release\EuroscopeLongPollingConnector.dll`.
 
 ### Why `-A Win32` is mandatory
 
@@ -46,8 +46,8 @@ project needs a rebuild and possibly a new SDK — see
 1. Start EuroScope (≥ 3.2.x; developed against the 3.2.13-era SDK,
    compatibility code 16).
 2. `Other Set` (OTHER SET button) → `Plug-Ins…` → `Load` → select
-   `WebSocketConnector.dll`.
-3. The plugin greets you in a chat tab named **WSC**. Type `.wsc help`.
+   `EuroscopeLongPollingConnector.dll`.
+3. The plugin greets you in a chat tab named **LPC**. Type `.lpc help`.
 
 If EuroScope refuses to load the DLL:
 
@@ -64,7 +64,7 @@ If EuroScope refuses to load the DLL:
   out. Use EuroScope's built-in simulator / SweatBox or a session playback.
 - Attach: *Debug → Attach to Process → EuroScope.exe* from Visual Studio,
   with the `Debug` build of the DLL loaded.
-- Quick print-debugging: `DisplayUserMessage(...)` into the WSC tab (see
+- Quick print-debugging: `DisplayUserMessage(...)` into the LPC tab (see
   `ConnectorPlugin::Say`).
 
 ## Verification status
@@ -108,7 +108,7 @@ every pull request and push to `main`:
   local build trees.
 
 Version identification: a locally built plugin announces itself as
-**`v0.0.0-dev`** in the WSC tab; only release builds carry a real
+**`v0.0.0-dev`** in the LPC tab; only release builds carry a real
 version. If EuroScope greets you with a version that doesn't match what
 you expect, you loaded a stale DLL.
 

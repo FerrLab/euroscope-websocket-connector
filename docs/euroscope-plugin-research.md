@@ -189,7 +189,7 @@ radar display; a headless data connector can skip it entirely.
 Takeaway: no widely adopted, maintained, general-purpose WebSocket
 connector exists — the niche this repo targets is real.
 
-## 4. Implications for euroscope-websocket-connector
+## 4. Implications for this project (researched under its original name, euroscope-websocket-connector)
 
 1. **Target**: C++ DLL, Win32 (x86), `_MBCS`, `COMPATIBILITY_CODE = 16`,
    built with MSVC (CMake recommended for CI-friendliness).

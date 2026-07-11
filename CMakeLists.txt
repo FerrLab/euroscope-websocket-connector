@@ -1,4 +1,4 @@
-# EuroScope WebSocket Connector plugin.
+# EuroScope Long Polling Connector plugin.
 #
 # EuroScope is a 32-bit Windows application, so this MUST be configured for
 # a 32-bit MSVC toolchain:
@@ -6,11 +6,11 @@
 #   cmake -B build -A Win32
 #   cmake --build build --config Release
 #
-# Output: build/Release/WebSocketConnector.dll
+# Output: build/Release/EuroscopeLongPollingConnector.dll
 # Full instructions: docs/BUILDING.md
 
 cmake_minimum_required(VERSION 3.20)
-project(euroscope-websocket-connector VERSION 0.1.0 LANGUAGES CXX)
+project(euroscope-longpolling-connector VERSION 0.1.0 LANGUAGES CXX)
 
 if(NOT WIN32)
     message(FATAL_ERROR
@@ -24,7 +24,7 @@ if(CMAKE_SIZEOF_VOID_P EQUAL 8)
         "Configure with:  cmake -B build -A Win32")
 endif()
 
-add_library(WebSocketConnector SHARED
+add_library(EuroscopeLongPollingConnector SHARED
     src/dllmain.cpp
     src/ConnectorPlugin.cpp
     src/Actions.cpp
@@ -37,11 +37,11 @@ add_library(WebSocketConnector SHARED
     src/http/WinHttpClient.cpp
 )
 
-target_compile_features(WebSocketConnector PRIVATE cxx_std_17)
+target_compile_features(EuroscopeLongPollingConnector PRIVATE cxx_std_17)
 
 # _MBCS: the EuroScope API uses multi-byte strings (the VATSIM protocol has
 # no Unicode); never build this with UNICODE defined.
-target_compile_definitions(WebSocketConnector PRIVATE
+target_compile_definitions(EuroscopeLongPollingConnector PRIVATE
     _MBCS
     WIN32_LEAN_AND_MEAN
     NOMINMAX
@@ -51,18 +51,18 @@ target_compile_definitions(WebSocketConnector PRIVATE
 # (cmake -B build -A Win32 -DPLUGIN_VERSION=0.6.1); without it, local
 # builds identify themselves as "0.0.0-dev" (src/ConnectorPlugin.h).
 if(DEFINED PLUGIN_VERSION)
-    target_compile_definitions(WebSocketConnector PRIVATE
+    target_compile_definitions(EuroscopeLongPollingConnector PRIVATE
         PLUGIN_VERSION="${PLUGIN_VERSION}")
 endif()
 
-target_include_directories(WebSocketConnector PRIVATE sdk src third_party)
-target_link_libraries(WebSocketConnector PRIVATE
+target_include_directories(EuroscopeLongPollingConnector PRIVATE sdk src third_party)
+target_link_libraries(EuroscopeLongPollingConnector PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/sdk/EuroScopePlugInDll.lib"
     winhttp)
 
 # Static CRT so users don't need a matching Visual C++ redistributable.
-set_target_properties(WebSocketConnector PROPERTIES
+set_target_properties(EuroscopeLongPollingConnector PROPERTIES
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
     PREFIX ""
-    OUTPUT_NAME "WebSocketConnector"
+    OUTPUT_NAME "EuroscopeLongPollingConnector"
 )
