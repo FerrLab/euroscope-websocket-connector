@@ -91,9 +91,9 @@ aircraft) come back as `ok:false` with the reason in `error`.
 
 `ok:true` on the two `send_*` actions means the message was queued into
 EuroScope's input path, not that it was delivered on the network. The
-consumed-by-EuroScope check happens about a second later and its verdict
-is reported only in the local WSC chat tab (the contract has no
-follow-up message for it).
+injection and its consumed-by-EuroScope check happen on the plugin's
+next two timer ticks (~2 s total); the verdict is reported only in the
+local WSC chat tab (the contract has no follow-up message for it).
 
 ## Events (plugin → backend/frontend)
 

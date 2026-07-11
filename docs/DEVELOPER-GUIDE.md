@@ -193,8 +193,9 @@ test procedure:
    (e.g. `.wsc msg NOSUCHUSER hi` — EuroScope accepts the command, so the
    *plugin* reports success; delivery failure shows in EuroScope's own
    chat, which is expected and documented behaviour). Note the verdict
-   ("sent" / "FAILED") arrives in the WSC tab up to a second after the
-   command — the keystroke is posted and verified on the next timer tick.
+   ("sent" / "FAILED") arrives in the WSC tab about two seconds after the
+   command — the injection dispatches on the next timer tick (never
+   during command processing) and is verified on the tick after that.
 
 ## Transport status & what's next
 

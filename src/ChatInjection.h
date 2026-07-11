@@ -26,13 +26,20 @@
 // live: SendMessage'd ENTER and FREQ keystrokes are ignored while the same
 // physical key presses work.
 //
-// Posting has a consequence: the key is processed only after the current
-// plugin callback returns, so "did EuroScope consume it?" cannot be
-// checked synchronously. Sends are queued; call Pump() once per second
-// (OnTimer) to resolve the in-flight send — judge the command line
-// (InjectionVerdict.h), restore the controller's own text, collect the
-// Outcome — and dispatch the next queued send. One send is in flight at a
-// time; a burst of N messages takes ~N seconds.
+// Posting has two consequences. (1) The key is processed only after the
+// current plugin callback returns, so "did EuroScope consume it?" cannot
+// be checked synchronously. (2) A send must not even START inside a
+// command callback: OnCompileCommand runs while the consumed ".wsc ..."
+// line is still sitting in the command line, and EuroScope clears the box
+// AFTER the callback returns — verified live: inline-injected text was
+// wiped before the posted key processed (nothing sent, box empty, a false
+// "consumed" verdict) and the pre-clear ".wsc" command was captured as
+// the "previous" content and wrongly restored. Sends therefore always
+// wait in a queue: Pump(), called once per second (OnTimer), dispatches
+// one send (WM_SETTEXT + posted key) while EuroScope is idle, then
+// resolves it on the following tick — judge the command line
+// (InjectionVerdict.h), restore the controller's own text, emit the
+// Outcome. One send is in flight at a time; expect ~2 s per message.
 //
 // LIMITATIONS - read before relying on this:
 //   * This drives undocumented UI internals. A future EuroScope version can

@@ -608,11 +608,6 @@ void ConnectorPlugin::OnRadarTargetPositionUpdate(EuroScopePlugIn::CRadarTarget 
 
 void ConnectorPlugin::OnTimer(int /*Counter*/)
 {
-    // Resolve chat-injection sends whose keystroke was posted on an
-    // earlier tick (deferred verification - see ChatInjection.h).
-    for (const ChatInjection::Outcome& outcome : ChatInjection::Pump())
-        Say(outcome.detail);
-
     const bool wasConnected = m_gateway.IsConnected();
 
     bool justConnected = false;
@@ -633,6 +628,13 @@ void ConnectorPlugin::OnTimer(int /*Counter*/)
 
     for (const std::string& message : inbound)
         m_gateway.Send(m_jsonApi.HandleMessage(message));
+
+    // Pump the chat-injection queue AFTER the inbound commands so a send
+    // queued by a gateway command dispatches this same tick; outcomes of
+    // sends dispatched on earlier ticks are reported here (deferred
+    // verification - see ChatInjection.h).
+    for (const ChatInjection::Outcome& outcome : ChatInjection::Pump())
+        Say(outcome.detail);
 }
 
 void ConnectorPlugin::CmdGateway(const std::vector<std::string>& tokens)
