@@ -1,0 +1,68 @@
+# CI for the EuroScope WebSocket Connector.
+#
+# Two jobs, mirroring the "Verification status" section of docs/BUILDING.md:
+#
+#   tests   (Linux)   — the standalone test project (tests/CMakeLists.txt).
+#                       This is the ONLY place the http_gateway transport
+#                       test runs: its scripted HTTP client/server use
+#                       POSIX sockets. Also runs the json_api contract test.
+#
+#   plugin  (Windows) — the real 32-bit MSVC build of the DLL, compiling
+#                       the EuroScope-facing code against the vendored SDK
+#                       and real Windows headers (which the Linux job never
+#                       touches), plus the json_api test under MSVC.
+#
+# Keep the jobs in sync with docs/BUILDING.md's CI note.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tests:
+    name: Test suite (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S tests -B build-tests -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build-tests
+
+      - name: Run tests (json_api + http_gateway)
+        run: ctest --test-dir build-tests --output-on-failure
+
+  plugin:
+    name: Plugin DLL (Windows, Win32)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # EuroScope is a 32-bit application; -A Win32 is mandatory
+      # (the root CMakeLists refuses to configure for anything else).
+      - name: Configure (32-bit MSVC)
+        run: cmake -B build -A Win32
+
+      - name: Build Release DLL
+        run: cmake --build build --config Release
+
+      - name: Configure tests
+        run: cmake -S tests -B build-tests
+
+      - name: Build tests
+        run: cmake --build build-tests --config Release
+
+      - name: Run tests (json_api; http_gateway is POSIX-only)
+        run: ctest --test-dir build-tests -C Release --output-on-failure
+
+      - name: Upload DLL artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: WebSocketConnector
+          path: build/Release/WebSocketConnector.dll
+          if-no-files-found: error
