@@ -76,20 +76,30 @@ What has and hasn't been verified, honestly:
   long polling, batched POSTs, bearer-token auth, backoff, snapshot
   gating and abort behaviour — end-to-end over live TCP against a
   scripted HTTP backend (40 checks; plain-HTTP test client on POSIX).
-- **Verified by type-checking only**: the EuroScope-facing code
+- **Verified by compilation only**: the EuroScope-facing code
   (`Actions`, `ConnectorPlugin`, `ChatInjection`) and `WinHttpClient` —
-  checked against the real SDK header / stubbed WinHTTP signatures, but
-  never run inside EuroScope or compiled with the real Windows headers by
-  the authors of this document (a Windows CI job would close that gap).
+  compiled by the Windows CI job with MSVC against the real SDK header
+  and real Windows headers, but never run inside EuroScope.
 - **Unverified until someone runs it in EuroScope**: plugin load, command
   behaviour on a live session, settings persistence, the chat-injection
   workaround, TLS against your real backend, and gateway behaviour under
   a real controller workload. Test in a SweatBox session first (see
   below).
 
-## CI note
+## CI
 
-The project deliberately has no non-Windows build path. If you add CI, use
-a `windows-latest` runner with `cmake -A Win32`; there is nothing to build
-or test on Linux (which also means: don't add Linux-only tooling to the
-core sources).
+CI ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) runs on
+every pull request and push to `main`:
+
+- **Linux job** — builds the standalone test project and runs the full
+  suite, including the `http_gateway` transport test (POSIX-only: its
+  scripted HTTP client/server use POSIX sockets, so Linux is the only
+  place it runs).
+- **Windows job** — the real `cmake -A Win32` MSVC build of the DLL —
+  the only compile of the EuroScope-facing code against the real Windows
+  headers — plus the `json_api` test under MSVC. The built DLL is
+  uploaded as a workflow artifact.
+
+The *plugin* itself still deliberately has no non-Windows build path:
+don't add Linux-only tooling to the core sources (`src/`); only `tests/`
+builds everywhere.
